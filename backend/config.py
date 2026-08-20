@@ -20,10 +20,24 @@ class Settings(BaseSettings):
     app_version: str = Field(default="2.0.0-alpha", description="API Version")
     environment: str = Field(default="development", description="Runtime environment (development, staging, production)")
     debug: bool = Field(default=False, description="Debug mode flag")
+    log_level: str = Field(default="INFO", description="Server logging level (DEBUG, INFO, WARNING, ERROR)")
 
     # API Server Configuration
     api_host: str = Field(default="0.0.0.0", description="FastAPI server host bind address")
     api_port: int = Field(default=8000, description="FastAPI server port")
+
+    # CORS Configuration (Step 6 Hardening - Configurable Origins)
+    cors_allowed_origins: List[str] = Field(
+        default=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:8501",
+            "http://127.0.0.1:8501"
+        ],
+        description="Allowed CORS origin URLs for React frontend and Streamlit"
+    )
 
     # Database URLs (Separated Dual-Role Architecture)
     database_url: Optional[str] = Field(default=None, description="Primary database connection string")
@@ -48,6 +62,9 @@ class Settings(BaseSettings):
         default=["csv", "xlsx", "json", "parquet"],
         description="Strictly allowed dataset file extensions"
     )
+
+    # External Network Fetch Timeout
+    external_fetch_timeout_sec: float = Field(default=10.0, description="Timeout in seconds for external dataset downloads")
 
     model_config = SettingsConfigDict(
         env_file=".env",

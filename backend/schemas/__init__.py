@@ -4,6 +4,7 @@ Backend Pydantic Schemas Package
 
 from .health import HealthResponse, DatabaseHealthStatus
 from .auth import AdminLoginRequest, AdminLoginResponse
+from .chat import ChatRequest, ChatResponse
 from .dataset import (
     DatasetMetadataSchema,
     DatasetUploadResponse,
@@ -31,6 +32,8 @@ __all__ = [
     "DatabaseHealthStatus",
     "AdminLoginRequest",
     "AdminLoginResponse",
+    "ChatRequest",
+    "ChatResponse",
     "DatasetMetadataSchema",
     "DatasetUploadResponse",
     "DatasetListResponse",
