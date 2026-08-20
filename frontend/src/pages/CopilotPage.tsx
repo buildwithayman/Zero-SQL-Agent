@@ -3,6 +3,7 @@ import { PageHeader } from '../components/common/PageHeader';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
+import { useDataset } from '../context/DatasetContext';
 import { NavLink } from 'react-router-dom';
 import { 
   BotMessageSquare, 
@@ -10,10 +11,14 @@ import {
   Database, 
   ShieldAlert, 
   BarChart3, 
-  ArrowRight 
+  ArrowRight,
+  Layers
 } from 'lucide-react';
 
 export const CopilotPage: React.FC = () => {
+  const { activeDataset } = useDataset();
+  const hasActiveDataset = !!(activeDataset.datasetName || activeDataset.tableName);
+
   return (
     <div>
       <PageHeader
@@ -28,6 +33,71 @@ export const CopilotPage: React.FC = () => {
           </NavLink>
         }
       />
+
+      {/* Active Dataset Focus Banner */}
+      <div
+        style={{
+          background: hasActiveDataset
+            ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(99, 102, 241, 0.15) 100%)'
+            : 'var(--bg-surface)',
+          border: hasActiveDataset ? '1px solid rgba(59, 130, 246, 0.35)' : '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '18px 24px',
+          marginBottom: '28px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div
+            style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: 'var(--radius-md)',
+              background: hasActiveDataset ? 'var(--primary-gradient)' : 'var(--bg-surface-elevated)',
+              color: '#fff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {hasActiveDataset ? <Sparkles size={20} /> : <Database size={20} />}
+          </div>
+          <div>
+            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: hasActiveDataset ? 'var(--primary-500)' : 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {hasActiveDataset ? 'Active Analysis Context' : 'General Schema Context'}
+            </div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '2px' }}>
+              {hasActiveDataset ? (
+                <span>
+                  {activeDataset.datasetName}{' '}
+                  <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-secondary)' }}>
+                    (Table: <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--primary-500)' }}>{activeDataset.tableName}</code>)
+                  </span>
+                </span>
+              ) : (
+                'No Specific Dataset Selected'
+              )}
+            </div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '3px' }}>
+              {hasActiveDataset
+                ? 'AI queries will prioritize this active dataset and its schema metadata.'
+                : 'Select a curated dataset from the Dataset Hub or query across all available tables.'}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <NavLink to="/hub">
+            <Button variant="secondary" size="sm" icon={<Layers size={14} />}>
+              {hasActiveDataset ? 'Switch Dataset' : 'Browse Datasets'}
+            </Button>
+          </NavLink>
+        </div>
+      </div>
 
       {/* Hero Welcome Card */}
       <Card
