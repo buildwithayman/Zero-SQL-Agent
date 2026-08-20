@@ -1,6 +1,7 @@
 """
 Dataset Management Pydantic Schemas
-Models for dataset upload, metadata inspection, listing, deletion, profiling, cleaning, and table ingestion.
+Models for dataset upload, metadata inspection, listing, deletion, profiling, cleaning,
+table ingestion, dynamic schema inspection, and automatic prompt suggestions.
 """
 
 from datetime import datetime
@@ -23,6 +24,7 @@ class DatasetMetadataSchema(BaseModel):
     table_name: Optional[str] = Field(default=None, description="PostgreSQL destination table name")
     row_count: Optional[int] = Field(default=None, description="Imported row count")
     column_count: Optional[int] = Field(default=None, description="Imported column count")
+    suggested_prompts: Optional[List[str]] = Field(default_factory=list, description="AI-generated one-click suggested questions")
     error_message: Optional[str] = Field(default=None, description="Error details if processing failed")
 
 
@@ -47,7 +49,7 @@ class DatasetDeleteResponse(BaseModel):
 
 
 # ==============================================================================
-# Step 3 Schemas: Profiling, Cleaning, and Dynamic Ingestion
+# Step 3 & 4 Schemas: Profiling, Cleaning, Dynamic Ingestion & Prompts
 # ==============================================================================
 
 class ColumnProfile(BaseModel):
@@ -93,6 +95,7 @@ class DatasetProcessResponse(BaseModel):
     preview: DatasetPreview = Field(description="Tabular preview of dataset")
     schema_detected: List[ColumnProfile] = Field(description="Detected schema with types and null counts")
     cleaning_report: CleaningReport = Field(description="Transparent cleaning report")
+    suggested_prompts: Optional[List[str]] = Field(default_factory=list, description="Suggested questions preview")
 
 
 class DatasetImportRequest(BaseModel):
@@ -108,3 +111,20 @@ class DatasetImportResponse(BaseModel):
     table_name: str = Field(description="Created PostgreSQL table name")
     rows_imported: int = Field(description="Exact count of rows inserted into PostgreSQL")
     columns_imported: int = Field(description="Count of columns created in table")
+    suggested_prompts: List[str] = Field(default_factory=list, description="Automatically generated prompt suggestions for this dataset")
+
+
+class DatasetPromptsResponse(BaseModel):
+    """Response model for dataset suggested analytical questions."""
+    dataset_id: str = Field(description="UUID of dataset")
+    dataset_name: str = Field(description="Display name of dataset")
+    table_name: Optional[str] = Field(default=None, description="PostgreSQL table name")
+    suggested_prompts: List[str] = Field(default_factory=list, description="One-click analytical questions")
+
+
+class DatasetSchemaResponse(BaseModel):
+    """Response model for live dataset table schema."""
+    dataset_id: str = Field(description="UUID of dataset")
+    dataset_name: str = Field(description="Display name of dataset")
+    table_name: str = Field(description="PostgreSQL table name")
+    columns: List[ColumnProfile] = Field(description="List of column profiles")

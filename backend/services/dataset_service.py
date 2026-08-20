@@ -3,6 +3,7 @@ Dataset Metadata Management Service
 Provides persistent CRUD operations for dataset tracking in PostgreSQL via admin connection.
 """
 
+import json
 from typing import List, Optional
 from datetime import datetime, timezone
 import database
@@ -30,13 +31,18 @@ def init_dataset_metadata_table():
         table_name VARCHAR(100),
         row_count BIGINT,
         column_count INT,
+        suggested_prompts TEXT,
         error_message TEXT
     );
+    """
+    alter_sql = """
+    ALTER TABLE dataset_metadata ADD COLUMN IF NOT EXISTS suggested_prompts TEXT;
     """
     try:
         with database.get_admin_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(create_table_sql)
+                cursor.execute(alter_sql)
             conn.commit()
     except Exception as e:
         # If database is offline or not reachable at init, allow graceful handling
@@ -46,6 +52,16 @@ def init_dataset_metadata_table():
 def row_to_schema(row: dict) -> DatasetMetadataSchema:
     """Converts a database dictionary row to DatasetMetadataSchema."""
     size_bytes = row.get("file_size_bytes", 0)
+    
+    # Parse stored JSON prompts
+    raw_prompts = row.get("suggested_prompts")
+    parsed_prompts: List[str] = []
+    if raw_prompts:
+        try:
+            parsed_prompts = json.loads(raw_prompts) if isinstance(raw_prompts, str) else list(raw_prompts)
+        except Exception:
+            parsed_prompts = []
+
     return DatasetMetadataSchema(
         dataset_id=row["dataset_id"],
         dataset_name=row["dataset_name"],
@@ -60,6 +76,7 @@ def row_to_schema(row: dict) -> DatasetMetadataSchema:
         table_name=row.get("table_name"),
         row_count=row.get("row_count"),
         column_count=row.get("column_count"),
+        suggested_prompts=parsed_prompts,
         error_message=row.get("error_message")
     )
 
@@ -137,6 +154,23 @@ class DatasetService:
 
         return row_to_schema(row) if row else None
 
+    def get_dataset_by_table_name(self, table_name: str) -> Optional[DatasetMetadataSchema]:
+        """
+        Retrieves a dataset metadata record by its destination table name.
+        """
+        select_sql = """
+        SELECT * FROM dataset_metadata
+        WHERE table_name = %s
+        ORDER BY upload_timestamp DESC
+        LIMIT 1;
+        """
+        with database.get_readonly_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(select_sql, (table_name,))
+                row = cursor.fetchone()
+
+        return row_to_schema(row) if row else None
+
     def delete_dataset(self, dataset_id: str) -> bool:
         """
         Deletes the dataset file from disk and deletes its metadata record from PostgreSQL.
@@ -164,17 +198,20 @@ class DatasetService:
         table_name: Optional[str] = None,
         row_count: Optional[int] = None,
         column_count: Optional[int] = None,
+        suggested_prompts: Optional[List[str]] = None,
         error_message: Optional[str] = None
     ) -> Optional[DatasetMetadataSchema]:
         """
-        Updates dataset lifecycle processing status, table name, row count, and errors.
+        Updates dataset lifecycle processing status, table name, row count, prompts, and errors.
         """
+        prompts_json = json.dumps(suggested_prompts) if suggested_prompts is not None else None
         update_sql = """
         UPDATE dataset_metadata
         SET processing_status = %s,
             table_name = COALESCE(%s, table_name),
             row_count = COALESCE(%s, row_count),
             column_count = COALESCE(%s, column_count),
+            suggested_prompts = COALESCE(%s, suggested_prompts),
             error_message = %s
         WHERE dataset_id = %s
         RETURNING *;
@@ -183,10 +220,9 @@ class DatasetService:
             with conn.cursor() as cursor:
                 cursor.execute(
                     update_sql,
-                    (processing_status, table_name, row_count, column_count, error_message, dataset_id)
+                    (processing_status, table_name, row_count, column_count, prompts_json, error_message, dataset_id)
                 )
                 row = cursor.fetchone()
             conn.commit()
 
         return row_to_schema(row) if row else None
-

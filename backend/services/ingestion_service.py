@@ -1,7 +1,7 @@
 """
 Data Ingestion and Dynamic PostgreSQL Table Creation Service
 Orchestrates file parsing, data profiling, data cleaning, schema generation,
-and transactional bulk import into PostgreSQL.
+automatic prompt suggestion generation, and transactional bulk import into PostgreSQL.
 """
 
 import os
@@ -18,6 +18,7 @@ from backend.services.storage_service import StorageService
 from backend.services.dataset_service import DatasetService
 from backend.services.cleaning_service import CleaningService
 from backend.services.schema_service import SchemaService, generate_safe_table_name
+from backend.services.prompt_service import PromptService
 from backend.schemas.dataset import (
     DatasetProcessResponse,
     DatasetPreview,
@@ -89,7 +90,7 @@ def load_dataset_file_to_df(stored_path: str, file_format: str) -> pd.DataFrame:
 
 
 class IngestionService:
-    """Orchestrates dataset processing and PostgreSQL table ingestion."""
+    """Orchestrates dataset processing, prompt generation, and PostgreSQL table ingestion."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -97,6 +98,7 @@ class IngestionService:
         self.dataset_svc = DatasetService(settings)
         self.cleaning_svc = CleaningService()
         self.schema_svc = SchemaService()
+        self.prompt_svc = PromptService()
 
     def _get_verified_dataset_meta(self, dataset_id: str):
         """Fetches and verifies dataset metadata and file existence."""
@@ -127,7 +129,7 @@ class IngestionService:
     def process_dataset(self, dataset_id: str) -> DatasetProcessResponse:
         """
         Parses, cleans, and profiles a dataset for admin inspection.
-        Does NOT create database tables.
+        Generates preview of prompt suggestions. Does NOT create database tables.
         """
         dataset, stored_path = self._get_verified_dataset_meta(dataset_id)
 
@@ -148,7 +150,6 @@ class IngestionService:
 
             # 5. Format Preview (First N rows)
             preview_df = cleaned_df.head(PREVIEW_ROWS_COUNT)
-            # Convert NaN/NaT to None for clean JSON serialization
             preview_records = preview_df.where(pd.notnull(preview_df), None).to_dict(orient="records")
 
             preview = DatasetPreview(
@@ -159,6 +160,13 @@ class IngestionService:
                 records=preview_records
             )
 
+            # 6. Generate Prompt Suggestions Preview
+            suggested_prompts = self.prompt_svc.generate_suggestions(
+                dataset_name=dataset.dataset_name,
+                table_name=suggested_table,
+                schema_profiles=schema_profiles
+            )
+
             return DatasetProcessResponse(
                 status="ready_for_import",
                 dataset_id=dataset_id,
@@ -166,7 +174,8 @@ class IngestionService:
                 suggested_table_name=suggested_table,
                 preview=preview,
                 schema_detected=schema_profiles,
-                cleaning_report=cleaning_report
+                cleaning_report=cleaning_report,
+                suggested_prompts=suggested_prompts
             )
 
         except Exception as e:
@@ -186,7 +195,8 @@ class IngestionService:
         custom_table_name: Optional[str] = None
     ) -> DatasetImportResponse:
         """
-        Executes atomic, transactional PostgreSQL table creation and bulk data insertion.
+        Executes atomic, transactional PostgreSQL table creation, bulk data insertion,
+        and automatic prompt suggestion registration.
         Uses the write-capable admin connection.
         """
         dataset, stored_path = self._get_verified_dataset_meta(dataset_id)
@@ -213,7 +223,14 @@ class IngestionService:
             schema_profiles = self.schema_svc.profile_dataset(cleaned_df, column_map)
             col_type_map = {p.normalized_name: p.detected_type for p in schema_profiles}
 
-            # 4. Transactional PostgreSQL Table Creation & Data Insertion
+            # 4. Generate High-Quality Analytical Prompt Suggestions
+            suggested_prompts = self.prompt_svc.generate_suggestions(
+                dataset_name=dataset.dataset_name,
+                table_name=target_table_name,
+                schema_profiles=schema_profiles
+            )
+
+            # 5. Transactional PostgreSQL Table Creation & Data Insertion
             with database.get_admin_db_connection() as conn:
                 with conn.cursor() as cursor:
                     # Construct CREATE TABLE using safe psycopg SQL identifiers
@@ -245,7 +262,6 @@ class IngestionService:
                     )
 
                     # Prepare rows as Python native types with None for missing values
-                    # Handle NaT / NaN cleanly
                     cleaned_df_sanitized = cleaned_df.where(pd.notnull(cleaned_df), None)
                     rows_to_insert = [tuple(row) for row in cleaned_df_sanitized.itertuples(index=False, name=None)]
 
@@ -264,13 +280,14 @@ class IngestionService:
                 # Commit transaction atomically
                 conn.commit()
 
-            # 5. Update Metadata Status to READY
+            # 6. Update Metadata Status to READY and persist suggested prompts
             self.dataset_svc.update_dataset_status(
                 dataset_id=dataset_id,
                 processing_status="READY",
                 table_name=target_table_name,
                 row_count=len(cleaned_df),
                 column_count=len(cleaned_df.columns),
+                suggested_prompts=suggested_prompts,
                 error_message=None
             )
 
@@ -280,7 +297,8 @@ class IngestionService:
                 dataset_id=dataset_id,
                 table_name=target_table_name,
                 rows_imported=len(cleaned_df),
-                columns_imported=len(cleaned_df.columns)
+                columns_imported=len(cleaned_df.columns),
+                suggested_prompts=suggested_prompts
             )
 
         except Exception as e:

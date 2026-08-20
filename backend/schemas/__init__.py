@@ -14,7 +14,9 @@ from .dataset import (
     DatasetPreview,
     DatasetProcessResponse,
     DatasetImportRequest,
-    DatasetImportResponse
+    DatasetImportResponse,
+    DatasetPromptsResponse,
+    DatasetSchemaResponse
 )
 
 __all__ = [
@@ -31,5 +33,7 @@ __all__ = [
     "DatasetPreview",
     "DatasetProcessResponse",
     "DatasetImportRequest",
-    "DatasetImportResponse"
+    "DatasetImportResponse",
+    "DatasetPromptsResponse",
+    "DatasetSchemaResponse"
 ]

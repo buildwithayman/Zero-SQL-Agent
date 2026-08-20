@@ -4,6 +4,7 @@ import sys
 import time
 import uuid
 import threading
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from sql_validator import validate_sql, is_query
 from database import (
@@ -154,10 +155,12 @@ def create_agent(model_name: str = None, temperature: float = 0.0, checkpointer=
         "1. You maintain conversation context across multiple turns. When a user asks follow-up questions referencing previous "
         "results (e.g. 'those employees', 'sort them by salary', 'now only IT department'), use the preceding conversation context to construct the query.\n"
         "2. If you do not know the database schema yet, invoke the `fetch_schema` tool first to inspect available tables, columns, and data types.\n"
-        "3. Formulate only valid read-only PostgreSQL SELECT or WITH (CTE) queries based on the user's request. Never invent tables or columns.\n"
+        "3. Formulate only valid read-only PostgreSQL SELECT or WITH (CTE) queries based on the user's request. Never invent tables or columns. "
+        "When an active dataset or table is mentioned in the context (e.g. [Active Context: Table 'xyz']), use that table and its actual columns.\n"
         "4. Always execute the SQL query using `run_sql_query` to verify and retrieve actual database results.\n"
         "5. If `run_sql_query` returns an error, analyze the error message, correct your query, and retry.\n"
-        "6. Finally, present a clear, comprehensive, and friendly natural language response summarizing the findings for the user."
+        "6. If the user asks for data or columns that do not exist in the database schema, explain that the requested column/table is unavailable instead of generating invalid SQL.\n"
+        "7. Finally, present a clear, comprehensive, and friendly natural language response summarizing the findings for the user."
     )
 
     agent = create_react_agent(
@@ -199,10 +202,12 @@ def ask_agent(
     user_question: str,
     thread_id: str = None,
     model_name: str = None,
-    temperature: float = 0.0
+    temperature: float = 0.0,
+    active_table: Optional[str] = None
 ) -> dict:
     """
     Invokes the LangGraph AI agent with the user question using thread-based conversation memory.
+    Supports optional active_table dataset context.
     Returns structured results including already-executed query data (eliminating duplicate DB calls).
 
     Returns:
@@ -217,10 +222,15 @@ def ask_agent(
         }
     """
     effective_thread_id = thread_id if thread_id else "default_session"
+    effective_input = (
+        f"[Active Context: Table '{active_table}']\n{user_question}"
+        if active_table
+        else user_question
+    )
 
     agent = get_or_create_agent(model_name=model_name, temperature=temperature)
     config = {"configurable": {"thread_id": effective_thread_id}}
-    inputs = {"messages": [("user", user_question)]}
+    inputs = {"messages": [("user", effective_input)]}
 
     response = agent.invoke(inputs, config=config)
 
@@ -262,6 +272,7 @@ def ask_agent(
         "query_result": query_result,
         "thread_id": effective_thread_id
     }
+
 
 
 # ==========================================

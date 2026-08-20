@@ -294,6 +294,9 @@ if "last_upload_result" not in st.session_state:
 if "processed_datasets" not in st.session_state:
     st.session_state.processed_datasets = {}
 
+if "selected_dataset_id" not in st.session_state:
+    st.session_state.selected_dataset_id = "ALL"
+
 FASTAPI_SERVER_URL = os.getenv("FASTAPI_SERVER_URL", "http://127.0.0.1:8000")
 _fastapi_client = None
 
@@ -550,8 +553,84 @@ tab_assistant, tab_explorer, tab_lab, tab_admin = st.tabs([
 # TAB 1: NEURAL CHAT & ANALYTICS
 # ------------------------------------------------------------------------------
 with tab_assistant:
-    # Empty State Hero when no messages yet
-    if not st.session_state.messages and not st.session_state.pending_prompt:
+    # --------------------------------------------------------------------------
+    # ACTIVE DATASET & DYNAMIC PROMPT SUGGESTIONS BAR
+    # --------------------------------------------------------------------------
+    ready_datasets = []
+    try:
+        resp_all = call_backend_api("GET", "/api/v1/admin/datasets")
+        if resp_all.status_code == 200:
+            all_ds = resp_all.json().get("datasets", [])
+            ready_datasets = [d for d in all_ds if d.get("processing_status") == "READY" and d.get("table_name")]
+    except Exception:
+        ready_datasets = []
+
+    ds_options = {"ALL": "🌐 All Database Tables (Full Schema)"}
+    ds_lookup = {}
+    for d in ready_datasets:
+        ds_options[d["dataset_id"]] = f"📊 {d['dataset_name']} (Table: {d['table_name']})"
+        ds_lookup[d["dataset_id"]] = d
+
+    # Ensure selected_dataset_id is valid
+    if st.session_state.selected_dataset_id not in ds_options:
+        st.session_state.selected_dataset_id = "ALL"
+
+    top_c1, top_c2 = st.columns([3, 1])
+    with top_c1:
+        chosen_ds_id = st.selectbox(
+            "Active Dataset Context",
+            options=list(ds_options.keys()),
+            format_func=lambda k: ds_options[k],
+            index=list(ds_options.keys()).index(st.session_state.selected_dataset_id),
+            key="ds_selector_dropdown",
+            help="Select a dataset to focus queries and see automatic one-click question suggestions."
+        )
+        if chosen_ds_id != st.session_state.selected_dataset_id:
+            st.session_state.selected_dataset_id = chosen_ds_id
+            st.rerun()
+
+    with top_c2:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh Schema", use_container_width=True, help="Force refresh database table and schema caches"):
+            st.cache_data.clear()
+            st.success("Schema cache refreshed!")
+            time.sleep(0.4)
+            st.rerun()
+
+    active_table_name = None
+    active_dataset = ds_lookup.get(st.session_state.selected_dataset_id)
+    if active_dataset:
+        active_table_name = active_dataset.get("table_name")
+        prompts = active_dataset.get("suggested_prompts") or []
+
+        # Render Active Dataset Badge & Suggested Prompts Card
+        st.markdown(f"""
+            <div style="background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 10px; padding: 12px 16px; margin: 8px 0 14px 0;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                    <div>
+                        <span style="font-weight: 700; color: #38bdf8; font-size: 0.92rem;">📊 ACTIVE DATASET:</span>
+                        <span style="font-weight: 600; color: #f8fafc; font-size: 0.92rem; margin-left: 6px;">{active_dataset.get('dataset_name')}</span>
+                        <span style="color: #94a3b8; font-size: 0.8rem; margin-left: 8px;">(Table: <code>{active_table_name}</code> • {active_dataset.get('row_count')} rows)</span>
+                    </div>
+                    <span class="pill-badge pill-active">⚡ AI-READY</span>
+                </div>
+                <div style="font-size: 0.82rem; font-weight: 600; color: #cbd5e1; margin-bottom: 6px;">💡 ONE-CLICK SUGGESTED QUESTIONS:</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        if prompts:
+            p_cols = st.columns(2)
+            for p_idx, p_text in enumerate(prompts):
+                target_col = p_cols[p_idx % 2]
+                with target_col:
+                    if st.button(f"👉 {p_text}", key=f"sug_btn_{active_dataset['dataset_id']}_{p_idx}", use_container_width=True):
+                        st.session_state.pending_prompt = p_text
+                        st.rerun()
+        else:
+            st.caption("Suggested questions are temporarily unavailable. You can still ask your own question below.")
+
+    # Empty State Hero when no messages yet and no specific dataset selected
+    elif not st.session_state.messages and not st.session_state.pending_prompt:
         st.markdown("<div style='margin: 16px 0 12px 0; font-size: 0.95rem; font-weight: 600; color: #cbd5e1;'>✨ Ask anything or pick a quick starter below:</div>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
@@ -615,7 +694,8 @@ with tab_assistant:
                         user_question=active_prompt,
                         thread_id=st.session_state.thread_id,
                         model_name=DEFAULT_GROQ_MODEL,
-                        temperature=HARDCODED_TEMPERATURE
+                        temperature=HARDCODED_TEMPERATURE,
+                        active_table=active_table_name
                     )
                     latency = round(time.time() - t_start, 2)
                     status_box.update(label=f"✅ Query complete ({latency}s)", state="complete", expanded=False)
@@ -1051,7 +1131,9 @@ with tab_admin:
                                         )
                                         if imp_resp.status_code == 200:
                                             st.session_state.processed_datasets.pop(ds_id, None)
-                                            st.success(f"🎉 Table '{target_tbl}' created and {prev.get('total_rows')} rows imported successfully!")
+                                            st.session_state.selected_dataset_id = ds_id
+                                            st.cache_data.clear()
+                                            st.success(f"🎉 Table '{target_tbl}' created and {prev.get('total_rows')} rows imported successfully! Set as Active Dataset.")
                                             time.sleep(1.0)
                                             st.rerun()
                                         else:

@@ -1,16 +1,19 @@
 """
 Admin Dataset Management Routes
 Handles secure file upload, listing, details inspection, dataset deletion,
-data profiling, data cleaning, and dynamic PostgreSQL table ingestion.
+data profiling, data cleaning, dynamic PostgreSQL table ingestion, and prompt suggestions.
 """
 
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
+import database
 from backend.config import Settings, get_settings
 from backend.services.auth_service import get_current_admin
 from backend.services.storage_service import StorageService
 from backend.services.dataset_service import DatasetService
 from backend.services.ingestion_service import IngestionService
+from backend.services.prompt_service import PromptService
+from backend.services.schema_service import SchemaService
 from backend.schemas.dataset import (
     DatasetMetadataSchema,
     DatasetUploadResponse,
@@ -18,10 +21,14 @@ from backend.schemas.dataset import (
     DatasetDeleteResponse,
     DatasetProcessResponse,
     DatasetImportRequest,
-    DatasetImportResponse
+    DatasetImportResponse,
+    DatasetPromptsResponse,
+    DatasetSchemaResponse,
+    ColumnProfile
 )
 
 router = APIRouter(prefix="/admin/datasets", tags=["Admin Datasets"])
+public_router = APIRouter(prefix="/datasets", tags=["Public Datasets"])
 
 
 @router.post(
@@ -196,3 +203,164 @@ def import_dataset(
     ingestion_svc = IngestionService(settings)
     custom_table = payload.custom_table_name if payload else None
     return ingestion_svc.import_dataset_to_database(dataset_id, custom_table_name=custom_table)
+
+
+@router.post(
+    "/{dataset_id}/prompts/regenerate",
+    response_model=DatasetPromptsResponse,
+    summary="Regenerate Prompt Suggestions",
+    description="Regenerates analytical question suggestions based on live table schema."
+)
+def regenerate_dataset_prompts(
+    dataset_id: str,
+    admin_user: str = Depends(get_current_admin),
+    settings: Settings = Depends(get_settings)
+) -> DatasetPromptsResponse:
+    """Admin-only endpoint to regenerate prompt suggestions from live PostgreSQL table."""
+    dataset_svc = DatasetService(settings)
+    dataset = dataset_svc.get_dataset_by_id(dataset_id)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset '{dataset_id}' not found."
+        )
+
+    if not dataset.table_name or dataset.processing_status != "READY":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dataset table has not been created yet."
+        )
+
+    # Fetch live column information from PostgreSQL
+    table_cols = database.get_table_details(dataset.table_name)
+    profiles = [
+        ColumnProfile(
+            original_name=c["column_name"],
+            normalized_name=c["column_name"],
+            detected_type=c["data_type"].upper(),
+            null_count=0,
+            null_percentage=0.0,
+            unique_count=10,
+            sample_value=None
+        )
+        for c in table_cols
+    ]
+
+    new_prompts = PromptService.generate_suggestions(
+        dataset_name=dataset.dataset_name,
+        table_name=dataset.table_name,
+        schema_profiles=profiles
+    )
+
+    # Update metadata
+    dataset_svc.update_dataset_status(
+        dataset_id=dataset_id,
+        processing_status=dataset.processing_status,
+        suggested_prompts=new_prompts
+    )
+
+    return DatasetPromptsResponse(
+        dataset_id=dataset_id,
+        dataset_name=dataset.dataset_name,
+        table_name=dataset.table_name,
+        suggested_prompts=new_prompts
+    )
+
+
+# ==============================================================================
+# Public Dataset Endpoints (Read-Only)
+# ==============================================================================
+
+@public_router.get(
+    "/{dataset_id}/prompts",
+    response_model=DatasetPromptsResponse,
+    summary="Get Dataset Prompt Suggestions",
+    description="Returns pre-computed or on-demand one-click analytical questions for a dataset."
+)
+def get_dataset_prompts(
+    dataset_id: str,
+    settings: Settings = Depends(get_settings)
+) -> DatasetPromptsResponse:
+    """Public read endpoint to fetch suggested prompts for active dataset."""
+    dataset_svc = DatasetService(settings)
+    dataset = dataset_svc.get_dataset_by_id(dataset_id)
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset with ID '{dataset_id}' not found."
+        )
+
+    prompts = dataset.suggested_prompts or []
+    # If no stored prompts but table exists, generate on demand
+    if not prompts and dataset.table_name and dataset.processing_status == "READY":
+        table_cols = database.get_table_details(dataset.table_name)
+        profiles = [
+            ColumnProfile(
+                original_name=c["column_name"],
+                normalized_name=c["column_name"],
+                detected_type=c["data_type"].upper(),
+                null_count=0,
+                null_percentage=0.0,
+                unique_count=10,
+                sample_value=None
+            )
+            for c in table_cols
+        ]
+        prompts = PromptService.generate_suggestions(
+            dataset_name=dataset.dataset_name,
+            table_name=dataset.table_name,
+            schema_profiles=profiles
+        )
+        dataset_svc.update_dataset_status(
+            dataset_id=dataset_id,
+            processing_status=dataset.processing_status,
+            suggested_prompts=prompts
+        )
+
+    return DatasetPromptsResponse(
+        dataset_id=dataset_id,
+        dataset_name=dataset.dataset_name,
+        table_name=dataset.table_name,
+        suggested_prompts=prompts
+    )
+
+
+@public_router.get(
+    "/{dataset_id}/schema",
+    response_model=DatasetSchemaResponse,
+    summary="Get Dataset Live Schema",
+    description="Returns column details from live PostgreSQL table."
+)
+def get_dataset_schema(
+    dataset_id: str,
+    settings: Settings = Depends(get_settings)
+) -> DatasetSchemaResponse:
+    """Public read endpoint to inspect live PostgreSQL column schema for a dataset."""
+    dataset_svc = DatasetService(settings)
+    dataset = dataset_svc.get_dataset_by_id(dataset_id)
+    if not dataset or not dataset.table_name:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dataset '{dataset_id}' or its PostgreSQL table does not exist."
+        )
+
+    table_cols = database.get_table_details(dataset.table_name)
+    profiles = [
+        ColumnProfile(
+            original_name=c["column_name"],
+            normalized_name=c["column_name"],
+            detected_type=c["data_type"].upper(),
+            null_count=0,
+            null_percentage=0.0,
+            unique_count=0,
+            sample_value=None
+        )
+        for c in table_cols
+    ]
+
+    return DatasetSchemaResponse(
+        dataset_id=dataset_id,
+        dataset_name=dataset.dataset_name,
+        table_name=dataset.table_name,
+        columns=profiles
+    )
