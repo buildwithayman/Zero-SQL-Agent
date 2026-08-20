@@ -10,6 +10,9 @@ from .auth_service import (
 )
 from .storage_service import StorageService, format_file_size, sanitize_filename
 from .dataset_service import DatasetService, init_dataset_metadata_table
+from .cleaning_service import CleaningService, normalize_column_name
+from .schema_service import SchemaService, infer_postgresql_type, generate_safe_table_name
+from .ingestion_service import IngestionService
 
 __all__ = [
     "get_current_admin",
@@ -20,5 +23,11 @@ __all__ = [
     "format_file_size",
     "sanitize_filename",
     "DatasetService",
-    "init_dataset_metadata_table"
+    "init_dataset_metadata_table",
+    "CleaningService",
+    "normalize_column_name",
+    "SchemaService",
+    "infer_postgresql_type",
+    "generate_safe_table_name",
+    "IngestionService"
 ]

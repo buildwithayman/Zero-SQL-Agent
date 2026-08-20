@@ -156,3 +156,37 @@ class DatasetService:
             conn.commit()
 
         return True
+
+    def update_dataset_status(
+        self,
+        dataset_id: str,
+        processing_status: str,
+        table_name: Optional[str] = None,
+        row_count: Optional[int] = None,
+        column_count: Optional[int] = None,
+        error_message: Optional[str] = None
+    ) -> Optional[DatasetMetadataSchema]:
+        """
+        Updates dataset lifecycle processing status, table name, row count, and errors.
+        """
+        update_sql = """
+        UPDATE dataset_metadata
+        SET processing_status = %s,
+            table_name = COALESCE(%s, table_name),
+            row_count = COALESCE(%s, row_count),
+            column_count = COALESCE(%s, column_count),
+            error_message = %s
+        WHERE dataset_id = %s
+        RETURNING *;
+        """
+        with database.get_admin_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    update_sql,
+                    (processing_status, table_name, row_count, column_count, error_message, dataset_id)
+                )
+                row = cursor.fetchone()
+            conn.commit()
+
+        return row_to_schema(row) if row else None
+

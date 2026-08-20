@@ -1,6 +1,7 @@
 """
 Admin Dataset Management Routes
-Handles secure file upload, listing, details inspection, and dataset deletion.
+Handles secure file upload, listing, details inspection, dataset deletion,
+data profiling, data cleaning, and dynamic PostgreSQL table ingestion.
 """
 
 from typing import Optional
@@ -9,11 +10,15 @@ from backend.config import Settings, get_settings
 from backend.services.auth_service import get_current_admin
 from backend.services.storage_service import StorageService
 from backend.services.dataset_service import DatasetService
+from backend.services.ingestion_service import IngestionService
 from backend.schemas.dataset import (
     DatasetMetadataSchema,
     DatasetUploadResponse,
     DatasetListResponse,
-    DatasetDeleteResponse
+    DatasetDeleteResponse,
+    DatasetProcessResponse,
+    DatasetImportRequest,
+    DatasetImportResponse
 )
 
 router = APIRouter(prefix="/admin/datasets", tags=["Admin Datasets"])
@@ -151,3 +156,43 @@ def delete_dataset(
         message=f"Dataset '{existing.dataset_name}' ({dataset_id}) deleted successfully.",
         deleted_dataset_id=dataset_id
     )
+
+
+@router.post(
+    "/{dataset_id}/process",
+    response_model=DatasetProcessResponse,
+    summary="Process, Clean, and Profile Dataset",
+    description="Parses dataset, performs non-destructive cleaning, detects schema types, and returns preview and cleaning report."
+)
+def process_dataset(
+    dataset_id: str,
+    admin_user: str = Depends(get_current_admin),
+    settings: Settings = Depends(get_settings)
+) -> DatasetProcessResponse:
+    """
+    Admin-only dataset processing endpoint.
+    Generates preview, cleaning report, and detected schema without modifying the database.
+    """
+    ingestion_svc = IngestionService(settings)
+    return ingestion_svc.process_dataset(dataset_id)
+
+
+@router.post(
+    "/{dataset_id}/import",
+    response_model=DatasetImportResponse,
+    summary="Create PostgreSQL Table and Import Data",
+    description="Executes explicit, transactional table creation and bulk insertion for the cleaned dataset."
+)
+def import_dataset(
+    dataset_id: str,
+    payload: Optional[DatasetImportRequest] = None,
+    admin_user: str = Depends(get_current_admin),
+    settings: Settings = Depends(get_settings)
+) -> DatasetImportResponse:
+    """
+    Admin-only explicit confirmation endpoint.
+    Dynamically creates table in PostgreSQL and imports cleaned records transactionally.
+    """
+    ingestion_svc = IngestionService(settings)
+    custom_table = payload.custom_table_name if payload else None
+    return ingestion_svc.import_dataset_to_database(dataset_id, custom_table_name=custom_table)

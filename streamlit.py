@@ -291,6 +291,9 @@ if "admin_user" not in st.session_state:
 if "last_upload_result" not in st.session_state:
     st.session_state.last_upload_result = None
 
+if "processed_datasets" not in st.session_state:
+    st.session_state.processed_datasets = {}
+
 FASTAPI_SERVER_URL = os.getenv("FASTAPI_SERVER_URL", "http://127.0.0.1:8000")
 _fastapi_client = None
 
@@ -922,46 +925,141 @@ with tab_admin:
             else:
                 for ds in dataset_list_data:
                     ds_id = ds["dataset_id"]
+                    status_str = ds["processing_status"]
+                    is_ready = status_str == "READY"
+                    is_failed = status_str == "FAILED"
+                    proc_info = st.session_state.processed_datasets.get(ds_id)
+
                     with st.container():
+                        badge_color = "pill-active" if is_ready else ("pill-badge" if not is_failed else "pill-nosql")
                         st.markdown(f"""
                             <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;">
                                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                                     <div>
                                         <span style="font-weight: 700; color: #f8fafc; font-size: 0.95rem;">{ds['dataset_name']}</span>
                                         <span style="font-size: 0.78rem; color: #94a3b8; margin-left: 8px;">({ds['original_filename']})</span>
+                                        {f"<span style='font-size: 0.78rem; color: #38bdf8; margin-left: 8px;'>📁 Table: <code>{ds['table_name']}</code> ({ds['row_count']} rows)</span>" if is_ready else ""}
                                     </div>
                                     <div style="display: flex; gap: 6px; align-items: center;">
                                         <span class="pill-badge pill-model">{ds['file_format'].upper()}</span>
                                         <span class="pill-badge" style="background: rgba(255,255,255,0.06); color: #cbd5e1;">{ds['file_size_formatted']}</span>
-                                        <span class="pill-badge pill-active">{ds['processing_status']}</span>
+                                        <span class="pill-badge {badge_color}">{status_str}</span>
                                     </div>
                                 </div>
                             </div>
                         """, unsafe_allow_html=True)
 
-                        c_act1, c_act2, _ = st.columns([1.2, 1, 4])
+                        # Action Toolbar
+                        c_act1, c_act2, c_act3, _ = st.columns([1.5, 1.2, 1, 3])
                         with c_act1:
-                            with st.expander(f"🔍 Details", expanded=False):
+                            if not is_ready:
+                                if st.button("⚡ Process & Analyze", key=f"proc_btn_{ds_id}", type="primary", use_container_width=True):
+                                    with st.spinner("Parsing, cleaning, and profiling dataset..."):
+                                        p_resp = call_backend_api("POST", f"/api/v1/admin/datasets/{ds_id}/process")
+                                        if p_resp.status_code == 200:
+                                            st.session_state.processed_datasets[ds_id] = p_resp.json()
+                                            st.success("Analysis complete! Review preview and schema below.")
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Processing failed: {p_resp.text}")
+                        with c_act2:
+                            with st.expander("🔍 Metadata", expanded=False):
                                 st.json({
                                     "dataset_id": ds["dataset_id"],
                                     "dataset_name": ds["dataset_name"],
                                     "original_filename": ds["original_filename"],
-                                    "stored_path": ds["stored_path"],
                                     "file_format": ds["file_format"],
                                     "file_size": ds["file_size_formatted"],
                                     "upload_timestamp": ds["upload_timestamp"],
                                     "processing_status": ds["processing_status"],
-                                    "uploaded_by": ds["uploaded_by"],
-                                    "destination_table": ds.get("table_name") or "Pending Step 3 Ingestion"
+                                    "destination_table": ds.get("table_name") or "Pending Table Creation",
+                                    "row_count": ds.get("row_count"),
+                                    "column_count": ds.get("column_count")
                                 })
-                        with c_act2:
+                        with c_act3:
                             if st.button("🗑️ Delete", key=f"del_{ds_id}", type="secondary", use_container_width=True):
                                 del_resp = call_backend_api("DELETE", f"/api/v1/admin/datasets/{ds_id}")
                                 if del_resp.status_code == 200:
+                                    st.session_state.processed_datasets.pop(ds_id, None)
                                     st.success(f"Dataset deleted!")
                                     time.sleep(0.5)
                                     st.rerun()
                                 else:
                                     st.error("Failed to delete dataset.")
+
+                        # Show Step 3 Ingestion Preview, Cleaning Report & Confirmation if processed
+                        if proc_info:
+                            st.markdown(f"""
+                                <div style="background: rgba(15, 23, 42, 0.9); border: 1.5px solid rgba(56, 189, 248, 0.4); border-radius: 12px; padding: 18px; margin: 12px 0 20px 0;">
+                                    <div style="font-size: 1.05rem; font-weight: 700; color: #38bdf8; margin-bottom: 12px;">
+                                        📋 DATASET ANALYSIS & INGESTION PREVIEW: {ds['dataset_name']}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                            # 1. Preview Table
+                            prev = proc_info.get("preview", {})
+                            st.markdown(f"**📊 DATA PREVIEW** — Total Rows: `{prev.get('total_rows')}` | Total Columns: `{prev.get('total_columns')}` (Showing first {prev.get('preview_rows')} rows)")
+                            if prev.get("records"):
+                                st.dataframe(pd.DataFrame(prev["records"]), use_container_width=True)
+
+                            # 2. Detected Schema
+                            schema_list = proc_info.get("schema_detected", [])
+                            st.markdown("**🔎 DETECTED POSTGRESQL SCHEMA**")
+                            if schema_list:
+                                schema_df = pd.DataFrame(schema_list)[["original_name", "normalized_name", "detected_type", "null_count", "null_percentage", "sample_value"]]
+                                schema_df.columns = ["Original Column", "Normalized Column", "PostgreSQL Type", "Null Count", "Null %", "Sample Value"]
+                                st.dataframe(schema_df, use_container_width=True, hide_index=True)
+
+                            # 3. Cleaning Report
+                            clean_rep = proc_info.get("cleaning_report", {})
+                            st.markdown("**🧹 CLEANING REPORT**")
+                            m_c1, m_c2, m_c3, m_c4 = st.columns(4)
+                            m_c1.metric("Rows Cleaned", f"{clean_rep.get('rows_after')} / {clean_rep.get('rows_before')}")
+                            m_c2.metric("Duplicates Dropped", clean_rep.get("duplicate_rows_removed", 0))
+                            m_c3.metric("Empty Rows Dropped", clean_rep.get("empty_rows_removed", 0))
+                            m_c4.metric("Nulls Preserved", clean_rep.get("null_values_preserved", 0))
+
+                            if clean_rep.get("operations_performed"):
+                                with st.expander("📝 Cleaning Operations Log", expanded=False):
+                                    for op in clean_rep["operations_performed"]:
+                                        st.markdown(f"- {op}")
+
+                            # 4. Explicit Confirmation & Import Section
+                            st.markdown("""
+                                <div style="background: rgba(34, 197, 94, 0.08); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 10px; padding: 14px; margin-top: 14px;">
+                                    <div style="font-size: 0.95rem; font-weight: 700; color: #4ade80; margin-bottom: 4px;">🚀 Ready for PostgreSQL Import</div>
+                                    <div style="font-size: 0.8rem; color: #cbd5e1;">Review the destination table name below and click to create table and bulk import.</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                            imp_c1, imp_c2, imp_c3 = st.columns([2, 1.2, 1])
+                            with imp_c1:
+                                target_tbl = st.text_input(
+                                    "Destination PostgreSQL Table Name",
+                                    value=proc_info.get("suggested_table_name", "custom_table"),
+                                    key=f"tbl_name_{ds_id}"
+                                )
+                            with imp_c2:
+                                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                                if st.button("🚀 Create Table & Import", key=f"do_import_{ds_id}", type="primary", use_container_width=True):
+                                    with st.spinner("Creating PostgreSQL table and inserting records..."):
+                                        imp_resp = call_backend_api(
+                                            "POST",
+                                            f"/api/v1/admin/datasets/{ds_id}/import",
+                                            json={"custom_table_name": target_tbl}
+                                        )
+                                        if imp_resp.status_code == 200:
+                                            st.session_state.processed_datasets.pop(ds_id, None)
+                                            st.success(f"🎉 Table '{target_tbl}' created and {prev.get('total_rows')} rows imported successfully!")
+                                            time.sleep(1.0)
+                                            st.rerun()
+                                        else:
+                                            st.error(f"Import Error: {imp_resp.text}")
+                            with imp_c3:
+                                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                                if st.button("❌ Close Preview", key=f"close_prev_{ds_id}", use_container_width=True):
+                                    st.session_state.processed_datasets.pop(ds_id, None)
+                                    st.rerun()
         else:
             st.error("Unable to load datasets from backend API.")

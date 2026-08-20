@@ -8,7 +8,13 @@ from .dataset import (
     DatasetMetadataSchema,
     DatasetUploadResponse,
     DatasetListResponse,
-    DatasetDeleteResponse
+    DatasetDeleteResponse,
+    ColumnProfile,
+    CleaningReport,
+    DatasetPreview,
+    DatasetProcessResponse,
+    DatasetImportRequest,
+    DatasetImportResponse
 )
 
 __all__ = [
@@ -19,5 +25,11 @@ __all__ = [
     "DatasetMetadataSchema",
     "DatasetUploadResponse",
     "DatasetListResponse",
-    "DatasetDeleteResponse"
+    "DatasetDeleteResponse",
+    "ColumnProfile",
+    "CleaningReport",
+    "DatasetPreview",
+    "DatasetProcessResponse",
+    "DatasetImportRequest",
+    "DatasetImportResponse"
 ]
