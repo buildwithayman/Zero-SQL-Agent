@@ -541,8 +541,9 @@ st.markdown(f"""
 # ==============================================================================
 # 5. CORE INTERACTION TABS
 # ==============================================================================
-tab_assistant, tab_explorer, tab_lab, tab_admin = st.tabs([
+tab_assistant, tab_hub, tab_explorer, tab_lab, tab_admin = st.tabs([
     "💬 Plain English Copilot",
+    "🌐 Dataset Hub",
     "📊 Data Matrix (Explorer)",
     "⚡ SQL Query Lab",
     "⚙️ Admin Hub"
@@ -753,9 +754,170 @@ with tab_assistant:
     st.markdown("<div class='chat-bottom-spacer'></div>", unsafe_allow_html=True)
 
 
+# ------------------------------------------------------------------------------
+# TAB 2: POPULAR DATASET HUB & AI RECOMMENDATIONS
+# ------------------------------------------------------------------------------
+with tab_hub:
+    st.markdown("""
+        <div style="margin-bottom: 16px;">
+            <div style="font-size: 1.25rem; font-weight: 700; color: #f8fafc;">🌐 Popular Dataset Hub & AI Recommendations</div>
+            <div style="font-size: 0.85rem; color: #94a3b8;">
+                Explore real public datasets across popular industries, ask for intelligent recommendations, and provision them instantly into the AI SQL Agent.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # 1. AI RECOMMENDATION ASSISTANT SECTION
+    st.markdown("""
+        <div style="background: rgba(30, 41, 59, 0.6); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <div style="font-size: 0.98rem; font-weight: 700; color: #38bdf8; margin-bottom: 4px;">🤖 AI Dataset Recommendation Assistant</div>
+            <div style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 10px;">
+                Describe what you want to analyze or practice (e.g. <i>"sales and profit trends"</i>, <i>"customer retention churn"</i>, <i>"employee compensation"</i>):
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    rec_c1, rec_c2 = st.columns([3.5, 1])
+    with rec_c1:
+        rec_query = st.text_input("Analytical Goal / Question", placeholder="e.g. I want to practice retail sales, revenue, and regional trends...", label_visibility="collapsed", key="hub_rec_input")
+    with rec_c2:
+        rec_btn = st.button("✨ Recommend Datasets", type="primary", use_container_width=True, key="hub_rec_btn")
+
+    if rec_query and (rec_btn or st.session_state.get("last_rec_query") == rec_query):
+        st.session_state["last_rec_query"] = rec_query
+        try:
+            r_rec = call_backend_api("POST", "/api/v1/datasets/recommendations", json={"query": rec_query, "limit": 3})
+            if r_rec.status_code == 200:
+                rec_data = r_rec.json()
+                recs = rec_data.get("recommended_datasets", [])
+                reasoning = rec_data.get("reasoning", "")
+                if recs:
+                    st.markdown(f"<div style='font-size: 0.85rem; font-weight: 600; color: #4ade80; margin: 10px 0 6px 0;'>💡 Top Recommendations for: \"{rec_query}\"</div>", unsafe_allow_html=True)
+                    r_cols = st.columns(len(recs))
+                    for r_idx, r_ds in enumerate(recs):
+                        with r_cols[r_idx]:
+                            st.markdown(f"""
+                                <div style="background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(74, 222, 128, 0.4); border-radius: 10px; padding: 14px; min-height: 140px;">
+                                    <div style="font-size: 0.92rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px;">{r_ds.get('name')}</div>
+                                    <div style="font-size: 0.78rem; color: #94a3b8; margin-bottom: 8px;">{r_ds.get('description', '')[:95]}...</div>
+                                    <div style="font-size: 0.75rem; color: #38bdf8; margin-bottom: 10px;">🏷️ {', '.join(r_ds.get('analytics_topics', [])[:2])}</div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            if st.button(f"⚡ Use Dataset", key=f"btn_rec_use_{r_ds['catalog_id']}", use_container_width=True, type="secondary"):
+                                with st.spinner(f"Loading '{r_ds['name']}' into PostgreSQL..."):
+                                    u_resp = call_backend_api("POST", f"/api/v1/datasets/catalog/{r_ds['catalog_id']}/use")
+                                    if u_resp.status_code == 200:
+                                        u_data = u_resp.json()
+                                        st.session_state.selected_dataset_id = u_data["dataset_id"]
+                                        st.cache_data.clear()
+                                        st.success(f"🎉 '{r_ds['name']}' is now loaded & active! Switch to Plain English Copilot tab to query.")
+                                        time.sleep(1.0)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Failed to use dataset: {u_resp.text}")
+                else:
+                    st.info("No matching datasets found for your query. Browse the catalog below.")
+            else:
+                st.error(f"Recommendation API error: {r_rec.text}")
+        except Exception as e:
+            st.warning(f"Could not load recommendations: {str(e)}")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    # 2. POPULAR DATASET CATALOG BROWSER
+    st.markdown("#### 🔥 Curated Popular Datasets")
+
+    # Category Filter Bar
+    cat_resp = call_backend_api("GET", "/api/v1/datasets/catalog/categories")
+    categories_list = ["All Categories"]
+    if cat_resp.status_code == 200:
+        for c in cat_resp.json().get("categories", []):
+            categories_list.append(c["name"])
+
+    chosen_cat = st.selectbox("Filter by Category", options=categories_list, key="hub_category_filter")
+    effective_cat = None if chosen_cat == "All Categories" else chosen_cat
+
+    # Fetch Catalog Datasets
+    params = {"category": effective_cat} if effective_cat else {}
+    cat_data_resp = call_backend_api("GET", "/api/v1/datasets/catalog", params=params)
+
+    if cat_data_resp.status_code == 200:
+        catalog_datasets = cat_data_resp.json().get("datasets", [])
+        if not catalog_datasets:
+            st.info("No datasets found in this category.")
+        else:
+            for i in range(0, len(catalog_datasets), 2):
+                col_a, col_b = st.columns(2)
+                pair = [catalog_datasets[i]]
+                if i + 1 < len(catalog_datasets):
+                    pair.append(catalog_datasets[i + 1])
+
+                for col_idx, ds_item in enumerate(pair):
+                    target_col = col_a if col_idx == 0 else col_b
+                    with target_col:
+                        is_imported = ds_item.get("is_imported", False)
+                        imported_tbl = ds_item.get("imported_table_name")
+                        status_badge = f'<span class="pill-badge pill-active">🟢 Active Table: {imported_tbl}</span>' if is_imported else '<span class="pill-badge pill-model">⚪ Available</span>'
+                        topics_html = " ".join([f'<span class="pill-badge" style="font-size: 0.72rem; padding: 2px 6px;">{t}</span>' for t in ds_item.get("analytics_topics", [])])
+
+                        st.markdown(f"""
+                            <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(51, 65, 85, 0.8); border-radius: 12px; padding: 16px; margin-bottom: 12px; min-height: 220px; display: flex; flex-direction: column; justify-content: space-between;">
+                                <div>
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                                        <div style="font-size: 1.02rem; font-weight: 700; color: #f8fafc;">
+                                            {ds_item.get('name')}
+                                        </div>
+                                        {status_badge}
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: #94a3b8; margin-bottom: 8px; line-height: 1.35;">
+                                        {ds_item.get('description')}
+                                    </div>
+                                    <div style="font-size: 0.75rem; color: #64748b; margin-bottom: 8px;">
+                                        <b>Category:</b> {ds_item.get('category')} &nbsp;•&nbsp; 
+                                        <b>Format:</b> {ds_item.get('file_format', 'CSV').upper()} &nbsp;•&nbsp; 
+                                        <b>Source:</b> <a href="{ds_item.get('source_url', '#')}" target="_blank" style="color: #38bdf8; text-decoration: none;">{ds_item.get('source_name')}</a>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 6px;">
+                                    <div style="font-size: 0.72rem; font-weight: 600; color: #cbd5e1; margin-bottom: 6px;">Key Topics: {topics_html}</div>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        btn_label = f"🎯 Select Active Dataset" if is_imported else f"⚡ Use Dataset"
+                        if st.button(btn_label, key=f"hub_use_btn_{ds_item['catalog_id']}", use_container_width=True, type="primary" if not is_imported else "secondary"):
+                            with st.spinner(f"Loading '{ds_item['name']}' through unified pipeline..."):
+                                use_r = call_backend_api("POST", f"/api/v1/datasets/catalog/{ds_item['catalog_id']}/use")
+                                if use_r.status_code == 200:
+                                    u_res = use_r.json()
+                                    st.session_state.selected_dataset_id = u_res["dataset_id"]
+                                    st.cache_data.clear()
+                                    st.success(f"🎉 '{ds_item['name']}' is ready! Table '{u_res['table_name']}' is now the Active Dataset context.")
+                                    time.sleep(1.0)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error loading dataset: {use_r.text}")
+    else:
+        st.error(f"Failed to load dataset catalog: {cat_data_resp.text}")
+
+    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+
+    # 3. UPLOAD YOUR OWN DATASET CALL-TO-ACTION
+    st.markdown("""
+        <div style="background: rgba(30, 41, 59, 0.4); border: 1px dashed rgba(148, 163, 184, 0.3); border-radius: 12px; padding: 16px; text-align: center; margin-top: 14px;">
+            <div style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-bottom: 4px;">📤 Have Your Own Custom Dataset?</div>
+            <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 10px;">
+                Upload CSV, XLSX, JSON, or Parquet datasets with automated cleaning, schema type inference, and dynamic table creation.
+            </div>
+            <div style="font-size: 0.8rem; color: #38bdf8; font-weight: 600;">
+                👉 Switch to the <b>⚙️ Admin Hub</b> tab to upload and manage custom datasets.
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
 
 # ------------------------------------------------------------------------------
-# TAB 2: DATA MATRIX (SCHEMA & TABLE EXPLORER)
+# TAB 3: DATA MATRIX (SCHEMA & TABLE EXPLORER)
 # ------------------------------------------------------------------------------
 with tab_explorer:
     if not db_meta["healthy"]:

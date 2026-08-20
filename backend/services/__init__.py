@@ -14,6 +14,8 @@ from .cleaning_service import CleaningService, normalize_column_name
 from .schema_service import SchemaService, infer_postgresql_type, generate_safe_table_name
 from .prompt_service import PromptService
 from .ingestion_service import IngestionService
+from .dataset_catalog_service import DatasetCatalogService
+from .dataset_recommendation_service import DatasetRecommendationService
 
 __all__ = [
     "get_current_admin",
@@ -31,5 +33,7 @@ __all__ = [
     "infer_postgresql_type",
     "generate_safe_table_name",
     "PromptService",
-    "IngestionService"
+    "IngestionService",
+    "DatasetCatalogService",
+    "DatasetRecommendationService"
 ]

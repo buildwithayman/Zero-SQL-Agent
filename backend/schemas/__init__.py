@@ -16,7 +16,14 @@ from .dataset import (
     DatasetImportRequest,
     DatasetImportResponse,
     DatasetPromptsResponse,
-    DatasetSchemaResponse
+    DatasetSchemaResponse,
+    CatalogDatasetSchema,
+    CatalogListResponse,
+    CategoryInfo,
+    CategoryListResponse,
+    DatasetRecommendationRequest,
+    DatasetRecommendationResponse,
+    UseCatalogDatasetResponse
 )
 
 __all__ = [
@@ -35,5 +42,12 @@ __all__ = [
     "DatasetImportRequest",
     "DatasetImportResponse",
     "DatasetPromptsResponse",
-    "DatasetSchemaResponse"
+    "DatasetSchemaResponse",
+    "CatalogDatasetSchema",
+    "CatalogListResponse",
+    "CategoryInfo",
+    "CategoryListResponse",
+    "DatasetRecommendationRequest",
+    "DatasetRecommendationResponse",
+    "UseCatalogDatasetResponse"
 ]

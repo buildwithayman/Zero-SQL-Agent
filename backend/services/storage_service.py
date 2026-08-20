@@ -192,6 +192,76 @@ class StorageService:
 
         return dataset_id, original_filename, stored_path, file_size, ext
 
+    def save_raw_bytes(
+        self,
+        content: bytes,
+        original_filename: str,
+        file_format: Optional[str] = None
+    ) -> Tuple[str, str, str, int, str]:
+        """
+        Validates, sanitizes, and persists raw bytes (e.g. from catalog download).
+        Enforces size limit, content structure validation, and UUID storage.
+        
+        Returns:
+            Tuple[dataset_id, original_filename, stored_path, file_size_bytes, file_format]
+        """
+        safe_orig_name = sanitize_filename(original_filename)
+        ext = file_format.lower().strip() if file_format else extract_file_extension(safe_orig_name)
+        if not ext:
+            ext = "csv"
+
+        # 1. Validate Extension
+        if ext not in self.settings.allowed_extensions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported format '{ext}'. Allowed formats: {', '.join(self.settings.allowed_extensions).upper()}"
+            )
+
+        # 2. Check Size
+        file_size = len(content)
+        if file_size == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Dataset content is empty (0 bytes)."
+            )
+
+        if file_size > self.settings.max_upload_size_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Dataset size ({format_file_size(file_size)}) exceeds maximum limit of {self.settings.max_upload_size_mb} MB."
+            )
+
+        # 3. Deep Content Validation
+        is_valid, reason = validate_file_content(content, ext)
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=reason
+            )
+
+        # 4. Generate Safe Unique Filename on Disk
+        dataset_id = str(uuid.uuid4())
+        stored_filename = f"{dataset_id}.{ext}"
+        stored_path = os.path.join(self.upload_dir, stored_filename)
+
+        if not os.path.abspath(stored_path).startswith(self.upload_dir):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security Error: Path traversal attempt detected."
+            )
+
+        try:
+            with open(stored_path, "wb") as f:
+                f.write(content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to persist dataset to storage: {str(e)}"
+            )
+
+        return dataset_id, safe_orig_name, stored_path, file_size, ext
+
+
     def delete_stored_file(self, stored_path: str) -> bool:
         """
         Safely deletes the stored file from disk if it exists.
