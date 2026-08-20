@@ -6,26 +6,60 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
+DATABASE_ADMIN_URL = os.getenv("DATABASE_ADMIN_URL", DATABASE_URL)
+
+
+def get_readonly_db_connection():
+    """
+    Establishes and returns a dedicated read-only connection for the AI SQL Agent.
+    Uses dict_row to return query results as dictionaries.
+    Strictly enforces transaction read-only mode at the connection level.
+    """
+    target_url = DATABASE_READONLY_URL or DATABASE_URL
+    if not target_url:
+        raise ValueError("DATABASE_URL / DATABASE_READONLY_URL is not set in the environment variables (.env).")
+    try:
+        conn = psycopg.connect(
+            target_url,
+            row_factory=dict_row
+        )
+        conn.read_only = True
+        return conn
+    except Exception as error:
+        raise ConnectionError(f"Unable to connect to PostgreSQL (Read-Only). Error: {str(error)}")
+
+
+def get_admin_db_connection():
+    """
+    Establishes and returns a write-capable connection for backend administrative
+    operations (such as database seeding and future dataset ingestion).
+    Uses dict_row to return query results as dictionaries.
+    IMPORTANT: This connection must NOT be exposed to the AI Agent.
+    """
+    target_url = DATABASE_ADMIN_URL or DATABASE_URL
+    if not target_url:
+        raise ValueError("DATABASE_URL / DATABASE_ADMIN_URL is not set in the environment variables (.env).")
+    try:
+        conn = psycopg.connect(
+            target_url,
+            row_factory=dict_row
+        )
+        return conn
+    except Exception as error:
+        raise ConnectionError(f"Unable to connect to PostgreSQL (Admin). Error: {str(error)}")
 
 
 def get_db_connection(readonly: bool = False):
     """
-    Establishes and returns a connection to the PostgreSQL database.
-    Uses dict_row to return query results as dictionaries.
-    If readonly is True, sets the connection to read-only mode for query safety.
+    Backward-compatible connection factory.
+    - If readonly is True: returns a read-only connection (for AI Agent / safe queries).
+    - If readonly is False: returns a write-enabled connection (for admin / seeding).
     """
-    if not DATABASE_URL:
-        raise ValueError("DATABASE_URL is not set in the environment variables (.env).")
-    try:
-        conn = psycopg.connect(
-            DATABASE_URL,
-            row_factory=dict_row
-        )
-        if readonly:
-            conn.read_only = True
-        return conn
-    except Exception as error:
-        raise ConnectionError(f"Unable to connect to PostgreSQL. Error: {str(error)}")
+    if readonly:
+        return get_readonly_db_connection()
+    else:
+        return get_admin_db_connection()
 
 
 def check_db_health() -> bool:
