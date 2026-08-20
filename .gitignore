@@ -33,3 +33,11 @@ __pycache__/
 # Logs
 
 *.log
+
+# Uploaded Datasets & Data Storage
+data/
+uploads/
+*.csv
+*.xlsx
+*.parquet
+*.jsonl

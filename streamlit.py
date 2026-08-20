@@ -8,9 +8,12 @@ import time
 import json
 import uuid
 import pandas as pd
+import requests
 import streamlit as st
 from datetime import datetime
 from dotenv import load_dotenv
+from fastapi.testclient import TestClient
+from backend.main import app as fastapi_app
 
 # Local imports
 from sql_validator import is_query, FORBIDDEN_KEYWORDS
@@ -279,6 +282,47 @@ if "messages" not in st.session_state:
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
 
+if "admin_token" not in st.session_state:
+    st.session_state.admin_token = None
+
+if "admin_user" not in st.session_state:
+    st.session_state.admin_user = None
+
+if "last_upload_result" not in st.session_state:
+    st.session_state.last_upload_result = None
+
+FASTAPI_SERVER_URL = os.getenv("FASTAPI_SERVER_URL", "http://127.0.0.1:8000")
+_fastapi_client = None
+
+
+def get_fastapi_client():
+    """Cached singleton TestClient for in-process ASGI fallback."""
+    global _fastapi_client
+    if _fastapi_client is None:
+        _fastapi_client = TestClient(fastapi_app)
+    return _fastapi_client
+
+
+def call_backend_api(method: str, endpoint: str, **kwargs):
+    """
+    Routes API requests to the live FastAPI server if available,
+    falling back seamlessly to direct in-process ASGI client.
+    Guarantees that all dataset operations strictly execute via FastAPI!
+    """
+    token = st.session_state.get("admin_token")
+    headers = kwargs.pop("headers", {})
+    if token and "Authorization" not in headers:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        url = f"{FASTAPI_SERVER_URL}{endpoint}"
+        resp = requests.request(method, url, headers=headers, timeout=4, **kwargs)
+        return resp
+    except Exception:
+        client = get_fastapi_client()
+        client_fn = getattr(client, method.lower())
+        return client_fn(endpoint, headers=headers, **kwargs)
+
 
 @st.cache_data(ttl=20)
 def get_db_status_cached():
@@ -491,10 +535,11 @@ st.markdown(f"""
 # ==============================================================================
 # 5. CORE INTERACTION TABS
 # ==============================================================================
-tab_assistant, tab_explorer, tab_lab = st.tabs([
+tab_assistant, tab_explorer, tab_lab, tab_admin = st.tabs([
     "💬 Plain English Copilot",
     "📊 Data Matrix (Explorer)",
-    "⚡ SQL Query Lab"
+    "⚡ SQL Query Lab",
+    "⚙️ Admin Hub"
 ])
 
 
@@ -712,3 +757,211 @@ ORDER BY revenue DESC;"""
             res = ask_agent(prompt, model_name=DEFAULT_GROQ_MODEL, temperature=HARDCODED_TEMPERATURE)
             st.markdown("### 💡 AI Query Breakdown")
             st.markdown(res.get("answer", "Unable to analyze."))
+
+
+# ------------------------------------------------------------------------------
+# TAB 4: SECURE ADMIN DATASET MANAGEMENT (V2 STEP 2)
+# ------------------------------------------------------------------------------
+with tab_admin:
+    st.markdown("""
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div>
+                <div style="font-size: 1.25rem; font-weight: 800; color: #f8fafc; font-family: 'Space Grotesk', sans-serif;">
+                    ⚙️ ADMIN DATASET MANAGEMENT
+                </div>
+                <div style="font-size: 0.82rem; color: #94a3b8;">
+                    Secure dataset ingestion, schema tracking, and metadata administration via FastAPI backend.
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Check authentication state
+    is_authenticated = bool(st.session_state.get("admin_token"))
+
+    if not is_authenticated:
+        # Show Admin Login Box
+        st.markdown("""
+            <div style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 14px; padding: 24px; max-width: 480px; margin: 20px auto; backdrop-filter: blur(16px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);">
+                <div style="font-size: 1.1rem; font-weight: 700; color: #38bdf8; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                    🔒 Admin Authentication Required
+                </div>
+                <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 16px;">
+                    Enter your administrator credentials to access dataset ingestion and deletion controls.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        col_l1, col_l2, col_l3 = st.columns([1, 2, 1])
+        with col_l2:
+            with st.form("admin_login_form"):
+                admin_user_input = st.text_input("Username", value="", placeholder="e.g. admin")
+                admin_pass_input = st.text_input("Password", type="password", placeholder="••••••••")
+                login_submitted = st.form_submit_button("🔑 Authenticate & Enter", type="primary", use_container_width=True)
+
+                if login_submitted:
+                    if not admin_user_input or not admin_pass_input:
+                        st.error("Please enter both username and password.")
+                    else:
+                        resp = call_backend_api(
+                            "POST",
+                            "/api/v1/admin/auth/login",
+                            json={"username": admin_user_input, "password": admin_pass_input}
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            st.session_state.admin_token = data.get("access_token")
+                            st.session_state.admin_user = data.get("username", admin_user_input)
+                            st.success(f"Authenticated successfully as {st.session_state.admin_user}!")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error("Invalid credentials. Access denied.")
+
+    else:
+        # Authenticated Admin View
+        top_c1, top_c2 = st.columns([3, 1])
+        with top_c1:
+            st.markdown(f"""
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 14px;">
+                    <span class="pill-badge pill-active"><span class="pulse-dot"></span> Authenticated as <strong>{st.session_state.admin_user}</strong></span>
+                    <span class="pill-badge pill-model">🛡️ Admin Role Active</span>
+                </div>
+            """, unsafe_allow_html=True)
+        with top_c2:
+            if st.button("🚪 Log Out", use_container_width=True):
+                st.session_state.admin_token = None
+                st.session_state.admin_user = None
+                st.session_state.last_upload_result = None
+                st.rerun()
+
+        st.markdown("---")
+
+        # ----------------------------------------------------------------------
+        # 1. UPLOAD DATASET SECTION
+        # ----------------------------------------------------------------------
+        st.markdown("""
+            <div style="font-size: 1.05rem; font-weight: 700; color: #f1f5f9; margin-bottom: 6px;">
+                📤 Upload Dataset
+            </div>
+            <div style="font-size: 0.82rem; color: #94a3b8; margin-bottom: 12px;">
+                Supported Formats: <span style="color: #38bdf8; font-weight: 600;">CSV</span> | <span style="color: #38bdf8; font-weight: 600;">XLSX</span> | <span style="color: #38bdf8; font-weight: 600;">JSON</span> | <span style="color: #38bdf8; font-weight: 600;">Parquet</span> (Max 50MB)
+            </div>
+        """, unsafe_allow_html=True)
+
+        up_col1, up_col2 = st.columns([2, 1])
+        with up_col1:
+            uploaded_file = st.file_uploader(
+                "Choose a dataset file",
+                type=["csv", "xlsx", "json", "parquet"],
+                help="Select a CSV, Excel, JSON, or Parquet dataset file for secure storage and metadata registration."
+            )
+        with up_col2:
+            custom_name = st.text_input(
+                "Dataset Display Name (Optional)",
+                placeholder="e.g. Q1 Sales Report",
+                help="Custom title for easy reference in metadata."
+            )
+            upload_btn = st.button("⚡ Upload & Validate Dataset", type="primary", use_container_width=True, disabled=(uploaded_file is None))
+
+        if upload_btn and uploaded_file is not None:
+            with st.spinner("Uploading and validating file via FastAPI..."):
+                file_bytes = uploaded_file.getvalue()
+                files = {"file": (uploaded_file.name, file_bytes, uploaded_file.type or "application/octet-stream")}
+                data = {"dataset_name": custom_name} if custom_name else {}
+
+                resp = call_backend_api(
+                    "POST",
+                    "/api/v1/admin/datasets/upload",
+                    files=files,
+                    data=data
+                )
+
+                if resp.status_code == 201:
+                    res_json = resp.json()
+                    st.session_state.last_upload_result = res_json.get("dataset")
+                    st.success(res_json.get("message", "Dataset uploaded successfully!"))
+                else:
+                    err_msg = resp.json().get("detail", "Upload failed.") if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+                    st.error(f"Upload Error: {err_msg}")
+
+        # Show Last Upload Result Card
+        if st.session_state.get("last_upload_result"):
+            last_ds = st.session_state.last_upload_result
+            st.markdown(f"""
+                <div style="background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 14px; margin: 12px 0;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #38bdf8; margin-bottom: 8px;">✅ LATEST UPLOAD REGISTERED</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; font-size: 0.8rem; color: #cbd5e1;">
+                        <div><strong style="color: #94a3b8;">Dataset:</strong> {last_ds.get('dataset_name')}</div>
+                        <div><strong style="color: #94a3b8;">File:</strong> {last_ds.get('original_filename')}</div>
+                        <div><strong style="color: #94a3b8;">Format:</strong> <span class="pill-badge pill-model">{last_ds.get('file_format', '').upper()}</span></div>
+                        <div><strong style="color: #94a3b8;">Size:</strong> {last_ds.get('file_size_formatted')}</div>
+                        <div><strong style="color: #94a3b8;">Status:</strong> <span class="pill-badge pill-active">{last_ds.get('processing_status')}</span></div>
+                        <div><strong style="color: #94a3b8;">ID:</strong> <code>{last_ds.get('dataset_id')}</code></div>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # ----------------------------------------------------------------------
+        # 2. EXISTING DATASETS REPOSITORY
+        # ----------------------------------------------------------------------
+        st.markdown("""
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 1.05rem; font-weight: 700; color: #f1f5f9;">📚 Existing Datasets</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Fetch dataset list via FastAPI
+        resp_list = call_backend_api("GET", "/api/v1/admin/datasets")
+        if resp_list.status_code == 200:
+            dataset_list_data = resp_list.json().get("datasets", [])
+            if not dataset_list_data:
+                st.info("No datasets uploaded yet. Upload a dataset using the form above.")
+            else:
+                for ds in dataset_list_data:
+                    ds_id = ds["dataset_id"]
+                    with st.container():
+                        st.markdown(f"""
+                            <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px 16px; margin-bottom: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                                    <div>
+                                        <span style="font-weight: 700; color: #f8fafc; font-size: 0.95rem;">{ds['dataset_name']}</span>
+                                        <span style="font-size: 0.78rem; color: #94a3b8; margin-left: 8px;">({ds['original_filename']})</span>
+                                    </div>
+                                    <div style="display: flex; gap: 6px; align-items: center;">
+                                        <span class="pill-badge pill-model">{ds['file_format'].upper()}</span>
+                                        <span class="pill-badge" style="background: rgba(255,255,255,0.06); color: #cbd5e1;">{ds['file_size_formatted']}</span>
+                                        <span class="pill-badge pill-active">{ds['processing_status']}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        c_act1, c_act2, _ = st.columns([1.2, 1, 4])
+                        with c_act1:
+                            with st.expander(f"🔍 Details", expanded=False):
+                                st.json({
+                                    "dataset_id": ds["dataset_id"],
+                                    "dataset_name": ds["dataset_name"],
+                                    "original_filename": ds["original_filename"],
+                                    "stored_path": ds["stored_path"],
+                                    "file_format": ds["file_format"],
+                                    "file_size": ds["file_size_formatted"],
+                                    "upload_timestamp": ds["upload_timestamp"],
+                                    "processing_status": ds["processing_status"],
+                                    "uploaded_by": ds["uploaded_by"],
+                                    "destination_table": ds.get("table_name") or "Pending Step 3 Ingestion"
+                                })
+                        with c_act2:
+                            if st.button("🗑️ Delete", key=f"del_{ds_id}", type="secondary", use_container_width=True):
+                                del_resp = call_backend_api("DELETE", f"/api/v1/admin/datasets/{ds_id}")
+                                if del_resp.status_code == 200:
+                                    st.success(f"Dataset deleted!")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to delete dataset.")
+        else:
+            st.error("Unable to load datasets from backend API.")

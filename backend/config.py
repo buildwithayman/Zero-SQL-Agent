@@ -5,7 +5,7 @@ Centralized, validated settings using Pydantic Settings and environment variable
 
 import os
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -34,11 +34,31 @@ class Settings(BaseSettings):
     groq_api_key: Optional[str] = Field(default=None, description="Groq Cloud API Key")
     groq_model: str = Field(default="openai/gpt-oss-120b", description="Default LLM model identifier")
 
+    # Admin Authentication Configuration (Step 2)
+    admin_username: str = Field(default="admin", description="Admin username for management portal")
+    admin_password: str = Field(default="admin123", description="Admin password for authentication")
+    admin_api_key: Optional[str] = Field(default="zerosql-admin-secret-key-2026", description="Static Admin API Key alternative")
+    secret_key: str = Field(default="zerosql-super-secret-hmac-jwt-key-2026", description="Secret key for signing auth tokens")
+    token_expire_minutes: int = Field(default=1440, description="Auth token expiration in minutes (24 hours)")
+
+    # Dataset Storage & Upload Limits (Step 2)
+    upload_dir: str = Field(default="data/uploads", description="Directory to store uploaded dataset files")
+    max_upload_size_mb: int = Field(default=50, description="Maximum allowed dataset upload size in megabytes")
+    allowed_extensions: List[str] = Field(
+        default=["csv", "xlsx", "json", "parquet"],
+        description="Strictly allowed dataset file extensions"
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
+    @property
+    def max_upload_size_bytes(self) -> int:
+        """Returns max upload size in bytes."""
+        return self.max_upload_size_mb * 1024 * 1024
 
     @property
     def effective_readonly_db_url(self) -> Optional[str]:
