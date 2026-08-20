@@ -4,6 +4,7 @@ import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { Button } from '../components/common/Button';
 import { useDataset } from '../context/DatasetContext';
+import { useChat } from '../context/ChatContext';
 import { NavLink } from 'react-router-dom';
 import { 
   BotMessageSquare, 
@@ -12,11 +13,14 @@ import {
   ShieldAlert, 
   BarChart3, 
   ArrowRight,
-  Layers
+  Layers,
+  MessageSquare,
+  X
 } from 'lucide-react';
 
 export const CopilotPage: React.FC = () => {
   const { activeDataset } = useDataset();
+  const { selectedPrompt, clearSelectedPrompt } = useChat();
   const hasActiveDataset = !!(activeDataset.datasetName || activeDataset.tableName);
 
   return (
@@ -33,6 +37,63 @@ export const CopilotPage: React.FC = () => {
           </NavLink>
         }
       />
+
+      {/* Staged Question from Explorer (Prompt Selection Preparation) */}
+      {selectedPrompt && (
+        <div
+          style={{
+            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(99, 102, 241, 0.18) 100%)',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '18px 24px',
+            marginBottom: '24px',
+            boxShadow: '0 0 20px rgba(59, 130, 246, 0.15)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '14px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--primary-gradient)',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: '2px',
+              }}
+            >
+              <MessageSquare size={18} />
+            </div>
+            <div>
+              <div style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--primary-500)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Suggested Question Staged from Explorer
+              </div>
+              <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '3px' }}>
+                "{selectedPrompt}"
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                Ready to ask this question in Copilot (Multi-turn chat execution enabled in Step 4).
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={clearSelectedPrompt}
+            className="btn btn-secondary btn-sm"
+            style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+          >
+            <X size={13} />
+            <span>Clear Question</span>
+          </button>
+        </div>
+      )}
 
       {/* Active Dataset Focus Banner */}
       <div
@@ -90,9 +151,16 @@ export const CopilotPage: React.FC = () => {
           </div>
         </div>
 
-        <div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          {hasActiveDataset && (
+            <NavLink to="/explorer">
+              <Button variant="secondary" size="sm" icon={<Layers size={14} />}>
+                Explore Schema
+              </Button>
+            </NavLink>
+          )}
           <NavLink to="/hub">
-            <Button variant="secondary" size="sm" icon={<Layers size={14} />}>
+            <Button variant="secondary" size="sm" icon={<Database size={14} />}>
               {hasActiveDataset ? 'Switch Dataset' : 'Browse Datasets'}
             </Button>
           </NavLink>
