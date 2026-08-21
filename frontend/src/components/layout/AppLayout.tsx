@@ -8,7 +8,22 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="app-container">
-      <Sidebar isOpen={sidebarOpen} />
+      {/* Mobile Drawer Backdrop */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+            backdropFilter: 'blur(3px)',
+            zIndex: 90,
+          }}
+          aria-hidden="true"
+        />
+      )}
+
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="main-content-wrapper">
         <Topbar onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
         <main className="page-content">

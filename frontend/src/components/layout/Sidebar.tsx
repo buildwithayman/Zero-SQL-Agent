@@ -5,14 +5,16 @@ import {
   Database, 
   Search, 
   Settings, 
-  ShieldCheck
+  ShieldCheck,
+  X
 } from 'lucide-react';
 
 interface SidebarProps {
   isOpen?: boolean;
+  onClose?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const navItems = [
     { to: '/copilot', label: 'AI Copilot', icon: <BotMessageSquare size={18} /> },
     { to: '/hub', label: 'Dataset Hub', icon: <Database size={18} /> },
@@ -21,15 +23,32 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false }) => {
   ];
 
   return (
-    <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
-      <div className="sidebar-header">
-        <div className="brand-logo">⚡</div>
-        <div>
-          <div className="brand-title">ZeroSQL AI</div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-            ENTERPRISE COPILOT
+    <aside className={`sidebar ${isOpen ? 'open' : ''}`} aria-label="Main sidebar navigation">
+      <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div className="brand-logo">⚡</div>
+          <div>
+            <div className="brand-title">ZeroSQL AI</div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
+              ENTERPRISE COPILOT
+            </div>
           </div>
         </div>
+
+        {onClose && (
+          <button
+            onClick={onClose}
+            aria-label="Close navigation sidebar"
+            className="mobile-menu-btn"
+            style={{
+              display: 'none',
+              color: 'var(--text-muted)',
+              padding: '4px',
+            }}
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       <nav className="sidebar-nav">
@@ -40,7 +59,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false }) => {
           <NavLink
             key={item.to}
             to={item.to}
+            onClick={onClose}
             className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+            aria-label={`Navigate to ${item.label}`}
           >
             {item.icon}
             <span>{item.label}</span>

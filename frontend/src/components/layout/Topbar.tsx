@@ -3,13 +3,13 @@ import { NavLink } from 'react-router-dom';
 import { BackendStatus } from '../common/BackendStatus';
 import { useDataset } from '../../context/DatasetContext';
 import { useAuth } from '../../context/AuthContext';
-import { Database, User, LogIn, LogOut, X, Sparkles } from 'lucide-react';
+import { Database, User, LogIn, LogOut, X, Sparkles, Menu } from 'lucide-react';
 
 interface TopbarProps {
   onToggleSidebar?: () => void;
 }
 
-export const Topbar: React.FC<TopbarProps> = () => {
+export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar }) => {
   const { activeDataset, clearActiveDataset } = useDataset();
   const { isAuthenticated, username, logout } = useAuth();
 
@@ -18,6 +18,26 @@ export const Topbar: React.FC<TopbarProps> = () => {
   return (
     <header className="topbar">
       <div className="topbar-left">
+        {/* Mobile Sidebar Toggle Button */}
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className="mobile-menu-btn"
+            aria-label="Toggle navigation menu"
+            style={{
+              display: 'none',
+              background: 'var(--bg-surface-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-sm)',
+              padding: '6px',
+              color: 'var(--text-primary)',
+              marginRight: '8px',
+            }}
+          >
+            <Menu size={18} />
+          </button>
+        )}
+
         <div
           style={{
             display: 'flex',
@@ -60,6 +80,7 @@ export const Topbar: React.FC<TopbarProps> = () => {
               )}
               <button
                 onClick={clearActiveDataset}
+                aria-label="Clear active dataset selection"
                 style={{
                   color: 'var(--text-muted)',
                   display: 'flex',
@@ -100,6 +121,7 @@ export const Topbar: React.FC<TopbarProps> = () => {
             <button
               onClick={logout}
               className="btn btn-secondary btn-sm"
+              aria-label="Sign out of admin session"
               title="Logout"
               style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
             >
@@ -108,7 +130,7 @@ export const Topbar: React.FC<TopbarProps> = () => {
             </button>
           </div>
         ) : (
-          <NavLink to="/login" className="btn btn-secondary btn-sm">
+          <NavLink to="/login" className="btn btn-secondary btn-sm" aria-label="Sign in to admin portal">
             <LogIn size={13} />
             <span>Admin Login</span>
           </NavLink>
