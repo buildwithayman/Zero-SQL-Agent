@@ -14,7 +14,7 @@ class ApiClient {
   }
 
   private getAuthHeader(): Record<string, string> {
-    const token = localStorage.getItem('zerosql_admin_token');
+    const token = sessionStorage.getItem('zerosql_admin_token');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
@@ -35,6 +35,14 @@ class ApiClient {
         }
       } catch {
         // Response was not JSON
+      }
+
+      // If unauthorized (401), clean up stored session token immediately
+      if (response.status === 401) {
+        sessionStorage.removeItem('zerosql_admin_token');
+        sessionStorage.removeItem('zerosql_admin_user');
+        localStorage.removeItem('zerosql_admin_token');
+        localStorage.removeItem('zerosql_admin_user');
       }
 
       const error: ApiError = {
@@ -67,7 +75,7 @@ class ApiClient {
       const response = await fetch(url.toString(), {
         method: 'GET',
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
           ...this.getAuthHeader(),
         },
       });
@@ -89,7 +97,7 @@ class ApiClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json',
+          Accept: 'application/json',
           ...this.getAuthHeader(),
         },
         body: body ? JSON.stringify(body) : undefined,
@@ -111,7 +119,7 @@ class ApiClient {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
           ...this.getAuthHeader(),
         },
         body: formData,
@@ -133,7 +141,7 @@ class ApiClient {
       const response = await fetch(url, {
         method: 'DELETE',
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
           ...this.getAuthHeader(),
         },
       });

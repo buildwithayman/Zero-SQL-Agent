@@ -1,116 +1,296 @@
 import React, { useState } from 'react';
-import { Card } from '../components/common/Card';
-import { Button } from '../components/common/Button';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { Lock, User, ArrowLeft } from 'lucide-react';
+import { adminService } from '../services/adminService';
+import { Lock, User, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { login } = useAuth();
-  const navigate = useNavigate();
+  const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleMockLogin = (e: React.FormEvent) => {
+  const { login, isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // If already authenticated, redirect to /admin
+  const from = (location.state as any)?.from?.pathname || '/admin';
+
+  React.useEffect(() => {
+    if (isAuthenticated) {
+      navigate(from, { replace: true });
+    }
+  }, [isAuthenticated, navigate, from]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Step 1 placeholder handler
-    login('placeholder_token_for_shell', username);
-    navigate('/admin');
+    if (!username.trim() || !password || isLoading) return;
+
+    setError(null);
+    setIsLoading(true);
+
+    try {
+      const response = await adminService.login({
+        username: username.trim(),
+        password: password,
+      });
+
+      login(response.access_token, response.username);
+      navigate(from, { replace: true });
+    } catch (err: any) {
+      if (err.status === 401) {
+        setError('Invalid username or password.');
+      } else {
+        setError(err.message || 'Unable to connect to the backend server. Please verify FastAPI is running.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <div style={{ maxWidth: '420px', margin: '60px auto' }}>
-      <button
-        onClick={() => navigate('/copilot')}
+    <div
+      style={{
+        minHeight: 'calc(100vh - var(--topbar-height) - 100px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 16px',
+      }}
+    >
+      <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          color: 'var(--text-secondary)',
-          fontSize: '0.85rem',
-          marginBottom: '20px',
+          width: '100%',
+          maxWidth: '440px',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-xl)',
+          padding: '36px 32px',
+          boxShadow: 'var(--shadow-xl)',
+          position: 'relative',
+          overflow: 'hidden',
         }}
       >
-        <ArrowLeft size={16} />
-        <span>Back to Copilot</span>
-      </button>
+        {/* Subtle Glow Accent */}
+        <div
+          style={{
+            position: 'absolute',
+            top: '-60px',
+            right: '-60px',
+            width: '160px',
+            height: '160px',
+            borderRadius: '50%',
+            background: 'rgba(59, 130, 246, 0.12)',
+            filter: 'blur(40px)',
+            pointerEvents: 'none',
+          }}
+        />
 
-      <Card>
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div
             style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: 'var(--radius-md)',
+              width: '48px',
+              height: '48px',
+              borderRadius: 'var(--radius-lg)',
               background: 'var(--primary-gradient)',
               color: '#fff',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              margin: '0 auto 12px',
+              margin: '0 auto 16px',
+              boxShadow: 'var(--shadow-glow)',
             }}
           >
-            <Lock size={20} />
+            <ShieldCheck size={26} />
           </div>
-          <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Admin Authentication</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '4px' }}>
-            Sign in to manage datasets and configure database tables
+          <h2 style={{ fontSize: '1.45rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+            Admin Portal
+          </h2>
+          <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+            Sign in to manage datasets, schema ingestion, and security guardrails.
           </p>
         </div>
 
-        <form onSubmit={handleMockLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Error Notice */}
+        {error && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              background: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 14px',
+              color: 'var(--error-text)',
+              fontSize: '0.82rem',
+              marginBottom: '20px',
+            }}
+          >
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Login Form */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {/* Username Input */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <label
+              style={{
+                display: 'block',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                marginBottom: '6px',
+              }}
+            >
               Username
             </label>
-            <div style={{ position: 'relative' }}>
-              <User size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              <User
+                size={16}
+                style={{
+                  position: 'absolute',
+                  left: '12px',
+                  color: 'var(--text-muted)',
+                }}
+              />
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                placeholder="Enter admin username"
+                required
+                disabled={isLoading}
                 style={{
                   width: '100%',
-                  background: 'var(--bg-surface-elevated)',
+                  background: 'var(--bg-app)',
                   border: '1px solid var(--border-strong)',
                   borderRadius: 'var(--radius-md)',
-                  padding: '10px 14px 10px 36px',
+                  padding: '10px 14px 10px 38px',
                   color: 'var(--text-primary)',
-                  fontSize: '0.875rem',
+                  fontSize: '0.88rem',
+                  outline: 'none',
+                  transition: 'border-color 0.15s ease',
                 }}
               />
             </div>
           </div>
 
+          {/* Password Input */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+            <label
+              style={{
+                display: 'block',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+                marginBottom: '6px',
+              }}
+            >
               Password
             </label>
-            <div style={{ position: 'relative' }}>
-              <Lock size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
-              <input
-                type="password"
-                placeholder="Enter password..."
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+            >
+              <Lock
+                size={16}
                 style={{
-                  width: '100%',
-                  background: 'var(--bg-surface-elevated)',
-                  border: '1px solid var(--border-strong)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '10px 14px 10px 36px',
-                  color: 'var(--text-primary)',
-                  fontSize: '0.875rem',
+                  position: 'absolute',
+                  left: '12px',
+                  color: 'var(--text-muted)',
                 }}
               />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                required
+                disabled={isLoading}
+                style={{
+                  width: '100%',
+                  background: 'var(--bg-app)',
+                  border: '1px solid var(--border-strong)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '10px 38px 10px 38px',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.88rem',
+                  outline: 'none',
+                  transition: 'border-color 0.15s ease',
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                tabIndex={-1}
+                style={{
+                  position: 'absolute',
+                  right: '12px',
+                  color: 'var(--text-muted)',
+                  display: 'flex',
+                }}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
             </div>
           </div>
 
-          <Button type="submit" variant="primary" style={{ width: '100%', marginTop: '8px' }}>
-            Sign In (Admin)
-          </Button>
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={!username.trim() || !password || isLoading}
+            className="btn btn-primary"
+            style={{
+              width: '100%',
+              padding: '11px',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.9rem',
+              fontWeight: 600,
+              marginTop: '6px',
+              opacity: !username.trim() || !password || isLoading ? 0.6 : 1,
+            }}
+          >
+            {isLoading ? (
+              <span className="spinner" style={{ width: '16px', height: '16px' }} />
+            ) : (
+              <>
+                <span>Sign In to Admin</span>
+                <ArrowRight size={15} />
+              </>
+            )}
+          </button>
         </form>
-      </Card>
+
+        {/* Security Footer Note */}
+        <div
+          style={{
+            marginTop: '24px',
+            paddingTop: '16px',
+            borderTop: '1px solid var(--border-subtle)',
+            fontSize: '0.72rem',
+            color: 'var(--text-muted)',
+            textAlign: 'center',
+            lineHeight: 1.4,
+          }}
+        >
+          Protected by Dual PostgreSQL RBAC & AST Token Validation
+        </div>
+      </div>
     </div>
   );
 };

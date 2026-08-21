@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 interface AuthContextType {
   isAuthenticated: boolean;
@@ -17,36 +17,45 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('zerosql_admin_token'));
-  const [username, setUsername] = useState<string | null>(() => localStorage.getItem('zerosql_admin_user'));
+  // Store admin Bearer token strictly in sessionStorage (session-scoped)
+  const [token, setToken] = useState<string | null>(() => {
+    return sessionStorage.getItem('zerosql_admin_token');
+  });
+
+  const [username, setUsername] = useState<string | null>(() => {
+    return sessionStorage.getItem('zerosql_admin_user');
+  });
 
   useEffect(() => {
     if (token) {
-      localStorage.setItem('zerosql_admin_token', token);
+      sessionStorage.setItem('zerosql_admin_token', token);
     } else {
-      localStorage.removeItem('zerosql_admin_token');
+      sessionStorage.removeItem('zerosql_admin_token');
     }
   }, [token]);
 
   useEffect(() => {
     if (username) {
-      localStorage.setItem('zerosql_admin_user', username);
+      sessionStorage.setItem('zerosql_admin_user', username);
     } else {
-      localStorage.removeItem('zerosql_admin_user');
+      sessionStorage.removeItem('zerosql_admin_user');
     }
   }, [username]);
 
-  const login = (newToken: string, newUsername: string) => {
+  const login = useCallback((newToken: string, newUsername: string) => {
     setToken(newToken);
     setUsername(newUsername);
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setToken(null);
     setUsername(null);
+    sessionStorage.removeItem('zerosql_admin_token');
+    sessionStorage.removeItem('zerosql_admin_user');
+    // Ensure any legacy localStorage keys are also completely purged
     localStorage.removeItem('zerosql_admin_token');
     localStorage.removeItem('zerosql_admin_user');
-  };
+  }, []);
 
   return (
     <AuthContext.Provider

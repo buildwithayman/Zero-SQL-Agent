@@ -4,6 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { DatasetProvider } from './context/DatasetContext';
 import { ChatProvider } from './context/ChatContext';
 import { AppLayout } from './components/layout/AppLayout';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { CopilotPage } from './pages/CopilotPage';
 import { DatasetHubPage } from './pages/DatasetHubPage';
 import { ExplorerPage } from './pages/ExplorerPage';
@@ -23,7 +24,14 @@ export const App: React.FC = () => {
                 <Route path="copilot" element={<CopilotPage />} />
                 <Route path="hub" element={<DatasetHubPage />} />
                 <Route path="explorer" element={<ExplorerPage />} />
-                <Route path="admin" element={<AdminPage />} />
+                <Route
+                  path="admin"
+                  element={
+                    <ProtectedRoute>
+                      <AdminPage />
+                    </ProtectedRoute>
+                  }
+                />
                 <Route path="login" element={<LoginPage />} />
                 {/* Fallback */}
                 <Route path="*" element={<Navigate to="/copilot" replace />} />
