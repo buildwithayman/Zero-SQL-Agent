@@ -3,11 +3,37 @@ import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
 DATABASE_ADMIN_URL = os.getenv("DATABASE_ADMIN_URL", DATABASE_URL)
+
+
+def _resolve_connection_url(admin: bool = False) -> str:
+    """
+    Resolves the target database connection URL from environment variables.
+    Supports DATABASE_ADMIN_URL / DATABASE_READONLY_URL / DATABASE_URL
+    as well as discrete DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD variables.
+    """
+    if admin:
+        url = os.getenv("DATABASE_ADMIN_URL") or os.getenv("DATABASE_URL") or DATABASE_ADMIN_URL or DATABASE_URL
+    else:
+        url = os.getenv("DATABASE_READONLY_URL") or os.getenv("DATABASE_URL") or DATABASE_READONLY_URL or DATABASE_URL
+
+    if not url:
+        host = os.getenv("DB_HOST")
+        port = os.getenv("DB_PORT", "5432")
+        name = os.getenv("DB_NAME")
+        user = os.getenv("DB_USER")
+        password = os.getenv("DB_PASSWORD")
+        if host and name:
+            import urllib.parse
+            encoded_pass = urllib.parse.quote(password or "", safe="")
+            auth = f"{user}:{encoded_pass}@" if user else ""
+            url = f"postgresql://{auth}{host}:{port}/{name}"
+
+    return url or ""
 
 
 def get_readonly_db_connection():
@@ -16,7 +42,7 @@ def get_readonly_db_connection():
     Uses dict_row to return query results as dictionaries.
     Strictly enforces transaction read-only mode at the connection level.
     """
-    target_url = DATABASE_READONLY_URL or DATABASE_URL
+    target_url = _resolve_connection_url(admin=False)
     if not target_url:
         raise ValueError("DATABASE_URL / DATABASE_READONLY_URL is not set in the environment variables (.env).")
     try:
@@ -37,7 +63,7 @@ def get_admin_db_connection():
     Uses dict_row to return query results as dictionaries.
     IMPORTANT: This connection must NOT be exposed to the AI Agent.
     """
-    target_url = DATABASE_ADMIN_URL or DATABASE_URL
+    target_url = _resolve_connection_url(admin=True)
     if not target_url:
         raise ValueError("DATABASE_URL / DATABASE_ADMIN_URL is not set in the environment variables (.env).")
     try:
