@@ -4,12 +4,22 @@ Provides persistent CRUD operations for dataset tracking in PostgreSQL via admin
 """
 
 import json
-from typing import List, Optional
+import re
+from typing import List, Optional, Tuple
 from datetime import datetime, timezone
+from psycopg import sql
 import database
 from backend.config import Settings
 from backend.schemas.dataset import DatasetMetadataSchema
 from backend.services.storage_service import StorageService, format_file_size
+
+
+# Immutable set of protected production tables that can NEVER be dropped via dataset cleanup
+PROTECTED_SYSTEM_TABLES = frozenset({
+    "departments", "users", "students", "products", "employees", "orders",
+    "superstore_sales", "customer_churn_analytics", "hr_workforce_analytics",
+    "supply_chain_logistics", "crypto_market_finance", "dataset_metadata"
+})
 
 
 def init_dataset_metadata_table():
@@ -50,17 +60,18 @@ def init_dataset_metadata_table():
 
 
 def row_to_schema(row: dict) -> DatasetMetadataSchema:
-    """Converts a database dictionary row to DatasetMetadataSchema."""
-    size_bytes = row.get("file_size_bytes", 0)
-    
-    # Parse stored JSON prompts
-    raw_prompts = row.get("suggested_prompts")
-    parsed_prompts: List[str] = []
-    if raw_prompts:
+    """Helper to convert database dict_row to DatasetMetadataSchema."""
+    prompts_raw = row.get("suggested_prompts")
+    prompts = []
+    if prompts_raw:
         try:
-            parsed_prompts = json.loads(raw_prompts) if isinstance(raw_prompts, str) else list(raw_prompts)
+            prompts = json.loads(prompts_raw) if isinstance(prompts_raw, str) else prompts_raw
         except Exception:
-            parsed_prompts = []
+            prompts = []
+
+    ts = row.get("upload_timestamp")
+    if ts and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
 
     return DatasetMetadataSchema(
         dataset_id=row["dataset_id"],
@@ -68,15 +79,15 @@ def row_to_schema(row: dict) -> DatasetMetadataSchema:
         original_filename=row["original_filename"],
         stored_path=row["stored_path"],
         file_format=row["file_format"],
-        file_size_bytes=size_bytes,
-        file_size_formatted=format_file_size(size_bytes),
-        upload_timestamp=row.get("upload_timestamp", datetime.now(timezone.utc)),
+        file_size_bytes=row["file_size_bytes"],
+        file_size_formatted=format_file_size(row["file_size_bytes"]),
+        upload_timestamp=ts or datetime.now(timezone.utc),
         processing_status=row.get("processing_status", "UPLOADED"),
         uploaded_by=row.get("uploaded_by", "admin"),
         table_name=row.get("table_name"),
         row_count=row.get("row_count"),
         column_count=row.get("column_count"),
-        suggested_prompts=parsed_prompts,
+        suggested_prompts=prompts,
         error_message=row.get("error_message")
     )
 
@@ -171,22 +182,88 @@ class DatasetService:
 
         return row_to_schema(row) if row else None
 
-    def delete_dataset(self, dataset_id: str) -> bool:
+    def delete_dataset(self, dataset_id: str, drop_physical_table: bool = True) -> Tuple[bool, Optional[str]]:
         """
-        Deletes the dataset file from disk and deletes its metadata record from PostgreSQL.
+        Safely deletes the dataset file from storage, removes the metadata record,
+        and atomically drops the associated physical dynamic PostgreSQL table.
+
+        Guarantees:
+        - Resolves table_name solely from trusted dataset_metadata using dataset_id.
+        - Refuses to drop any table in PROTECTED_SYSTEM_TABLES.
+        - Validates table identifier format strictly (^([a-z_][a-z0-9_]{0,62})$).
+        - Executes plain DROP TABLE IF EXISTS (no CASCADE) and metadata DELETE within a single transaction.
+        - Deletes disk file only after successful database commit.
+
+        Returns:
+            Tuple[bool, Optional[str]]: (success, dropped_table_name)
         """
         dataset = self.get_dataset_by_id(dataset_id)
         if not dataset:
-            return False
+            return False, None
 
-        # 1. Safely remove from storage
-        self.storage.delete_stored_file(dataset.stored_path)
+        table_to_drop = dataset.table_name
 
-        # 2. Remove metadata record from PostgreSQL
-        delete_sql = "DELETE FROM dataset_metadata WHERE dataset_id = %s;"
+        # 1. Strict Protected Table Guardrail
+        if table_to_drop and table_to_drop.lower() in PROTECTED_SYSTEM_TABLES:
+            raise ValueError(f"Security Error: Cannot drop protected system table '{table_to_drop}'.")
+
+        # 2. Strict Identifier Format Guardrail
+        if table_to_drop and not re.match(r'^[a-z_][a-z0-9_]{0,62}$', table_to_drop):
+            raise ValueError(f"Security Error: Invalid table identifier '{table_to_drop}'.")
+
+        # 3. Transactional Database Deletion (Physical Table Drop + Metadata Record Delete)
         with database.get_admin_db_connection() as conn:
             with conn.cursor() as cursor:
+                # Plain DROP TABLE IF EXISTS (without CASCADE)
+                if drop_physical_table and table_to_drop:
+                    drop_sql = sql.SQL("DROP TABLE IF EXISTS {}").format(
+                        sql.Identifier(table_to_drop)
+                    )
+                    cursor.execute(drop_sql)
+
+                # Delete metadata record
+                delete_sql = "DELETE FROM dataset_metadata WHERE dataset_id = %s;"
                 cursor.execute(delete_sql, (dataset_id,))
+            conn.commit()
+
+        # 4. Remove file from storage disk artifact (strictly post-commit)
+        if dataset.stored_path:
+            self.storage.delete_stored_file(dataset.stored_path)
+
+        return True, table_to_drop
+
+    def cleanup_orphan_dynamic_table(self, table_name: str) -> bool:
+        """
+        Targeted cleanup for a specific orphan dynamic table that is not registered in dataset_metadata.
+
+        Strict Guardrails:
+        1. Name cannot be in PROTECTED_SYSTEM_TABLES.
+        2. Must be a valid PostgreSQL identifier matching ^[a-z_][a-z0-9_]{0,62}$.
+        3. Must NOT be registered to an existing active dataset in dataset_metadata.
+        4. Uses plain DROP TABLE IF EXISTS without CASCADE via admin connection.
+        """
+        clean_name = table_name.strip().lower()
+
+        # Guardrail 1: Protected Table Block
+        if clean_name in PROTECTED_SYSTEM_TABLES:
+            raise ValueError(f"Security Error: Refusing to drop protected table '{clean_name}'.")
+
+        # Guardrail 2: Identifier Format
+        if not re.match(r'^[a-z_][a-z0-9_]{0,62}$', clean_name):
+            raise ValueError(f"Security Error: Invalid table identifier format '{clean_name}'.")
+
+        # Guardrail 3: Verify not currently registered to an active dataset
+        existing_meta = self.get_dataset_by_table_name(clean_name)
+        if existing_meta:
+            raise ValueError(
+                f"Table '{clean_name}' is actively registered to dataset ID '{existing_meta.dataset_id}'. "
+                f"Use delete_dataset() instead."
+            )
+
+        # Execute targeted plain DROP TABLE
+        with database.get_admin_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(clean_name)))
             conn.commit()
 
         return True

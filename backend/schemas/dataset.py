@@ -47,6 +47,7 @@ class DatasetDeleteResponse(BaseModel):
     status: str = Field(default="success", description="Deletion status")
     message: str = Field(description="Status message")
     deleted_dataset_id: str = Field(description="ID of the deleted dataset")
+    dropped_table_name: Optional[str] = Field(default=None, description="Name of the dropped physical table if one existed")
 
 
 # ==============================================================================

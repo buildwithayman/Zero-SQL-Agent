@@ -141,7 +141,7 @@ def get_dataset_details(
     "/{dataset_id}",
     response_model=DatasetDeleteResponse,
     summary="Delete Dataset",
-    description="Safely removes dataset file from storage and removes metadata record from PostgreSQL."
+    description="Safely drops physical dynamic table, removes dataset file from storage, and deletes metadata record from PostgreSQL."
 )
 def delete_dataset(
     dataset_id: str,
@@ -157,17 +157,31 @@ def delete_dataset(
             detail=f"Dataset with ID '{dataset_id}' not found."
         )
 
-    success = dataset_svc.delete_dataset(dataset_id)
+    try:
+        success, dropped_table = dataset_svc.delete_dataset(dataset_id)
+    except ValueError as val_err:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(val_err)
+        )
+    except Exception as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete dataset '{dataset_id}': {str(err)}"
+        )
+
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete dataset '{dataset_id}'."
         )
 
+    table_msg = f" and dropped table '{dropped_table}'" if dropped_table else ""
     return DatasetDeleteResponse(
         status="success",
-        message=f"Dataset '{existing.dataset_name}' ({dataset_id}) deleted successfully.",
-        deleted_dataset_id=dataset_id
+        message=f"Dataset '{existing.dataset_name}' ({dataset_id}) deleted successfully{table_msg}.",
+        deleted_dataset_id=dataset_id,
+        dropped_table_name=dropped_table
     )
 
 
