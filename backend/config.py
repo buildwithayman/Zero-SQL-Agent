@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     database_readonly_url: Optional[str] = Field(default=None, description="Dedicated read-only connection string for AI Agent")
     database_admin_url: Optional[str] = Field(default=None, description="Dedicated admin write connection string for backend ingestion")
 
+    # Database Connection Pool Settings (Step 7D Hardening)
+    db_pool_readonly_min: int = Field(default=2, description="Minimum connections in read-only pool")
+    db_pool_readonly_max: int = Field(default=8, description="Maximum connections in read-only pool")
+    db_pool_admin_min: int = Field(default=1, description="Minimum connections in admin write pool")
+    db_pool_admin_max: int = Field(default=4, description="Maximum connections in admin write pool")
+    db_pool_timeout: float = Field(default=10.0, description="Timeout in seconds to acquire a connection from the pool")
+    db_connect_timeout: int = Field(default=10, description="Database connection handshake timeout in seconds")
+    db_sslmode: str = Field(default="require", description="PostgreSQL SSL mode (e.g. require, prefer, disable)")
+
     # AI Engine Configuration
     groq_api_key: Optional[str] = Field(default=None, description="Groq Cloud API Key")
     groq_model: str = Field(default="openai/gpt-oss-120b", description="Default LLM model identifier")

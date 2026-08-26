@@ -17,6 +17,7 @@ from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.datasets import router as dataset_router, public_router as public_dataset_router
 from backend.api.routes.chat import router as chat_router
+import database
 from backend.services.dataset_service import init_dataset_metadata_table
 
 settings = get_settings()
@@ -27,9 +28,22 @@ logger = setup_logging(settings.log_level)
 async def lifespan(app: FastAPI):
     """Lifecycle startup and shutdown handler."""
     logger.info(f"Starting {settings.app_name} v{settings.app_version} in [{settings.environment}] mode...")
+    database.init_db_pools(
+        min_size_ro=settings.db_pool_readonly_min,
+        max_size_ro=settings.db_pool_readonly_max,
+        min_size_admin=settings.db_pool_admin_min,
+        max_size_admin=settings.db_pool_admin_max,
+        timeout=settings.db_pool_timeout,
+        connect_timeout=settings.db_connect_timeout,
+        sslmode=settings.db_sslmode
+    )
+    logger.info("Database connection pools initialized.")
     init_dataset_metadata_table()
     logger.info("Database metadata tables verified.")
     yield
+    logger.info("Closing database connection pools...")
+    database.close_db_pools()
+    logger.info("Database connection pools closed.")
     logger.info(f"Shutting down {settings.app_name}...")
 
 

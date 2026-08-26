@@ -1,6 +1,10 @@
 import os
+import threading
+import urllib.parse
+from typing import Optional, Dict, Any
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool, PoolTimeout
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -8,6 +12,23 @@ load_dotenv(override=True)
 DATABASE_URL = os.getenv("DATABASE_URL")
 DATABASE_READONLY_URL = os.getenv("DATABASE_READONLY_URL", DATABASE_URL)
 DATABASE_ADMIN_URL = os.getenv("DATABASE_ADMIN_URL", DATABASE_URL)
+
+
+def _harden_connection_url(url: str, connect_timeout: int = 10, sslmode: str = "require") -> str:
+    """
+    Appends connect_timeout and sslmode parameters if not already present.
+    Preserves all existing query parameters without duplication.
+    """
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    query_params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if "connect_timeout" not in query_params:
+        query_params["connect_timeout"] = [str(connect_timeout)]
+    if "sslmode" not in query_params:
+        query_params["sslmode"] = [sslmode]
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
 
 def _resolve_connection_url(admin: bool = False) -> str:
@@ -28,7 +49,6 @@ def _resolve_connection_url(admin: bool = False) -> str:
         user = os.getenv("DB_USER")
         password = os.getenv("DB_PASSWORD")
         if host and name:
-            import urllib.parse
             encoded_pass = urllib.parse.quote(password or "", safe="")
             auth = f"{user}:{encoded_pass}@" if user else ""
             url = f"postgresql://{auth}{host}:{port}/{name}"
@@ -36,42 +56,266 @@ def _resolve_connection_url(admin: bool = False) -> str:
     return url or ""
 
 
+# ==============================================================================
+# Connection Pool State (Initialized post-fork during FastAPI lifespan)
+# ==============================================================================
+_readonly_pool: Optional[ConnectionPool] = None
+_admin_pool: Optional[ConnectionPool] = None
+_pool_lock = threading.Lock()
+
+
+def init_db_pools(
+    min_size_ro: int = 2,
+    max_size_ro: int = 8,
+    min_size_admin: int = 1,
+    max_size_admin: int = 4,
+    timeout: float = 10.0,
+    connect_timeout: int = 10,
+    sslmode: str = "require"
+) -> None:
+    """
+    Initializes dedicated read-only and admin connection pools idempotently.
+    Pools are created after process forking (e.g. within FastAPI lifespan) to
+    prevent socket file descriptor inheritance across worker processes.
+    """
+    global _readonly_pool, _admin_pool
+    with _pool_lock:
+        if _readonly_pool is not None and _admin_pool is not None:
+            return
+
+        ro_url = _resolve_connection_url(admin=False)
+        admin_url = _resolve_connection_url(admin=True)
+
+        if not ro_url and admin_url:
+            ro_url = admin_url
+
+        if not ro_url:
+            return
+
+        hardened_ro_url = _harden_connection_url(ro_url, connect_timeout=connect_timeout, sslmode=sslmode)
+        hardened_admin_url = _harden_connection_url(admin_url or ro_url, connect_timeout=connect_timeout, sslmode=sslmode)
+
+        def _configure_readonly(conn: psycopg.Connection):
+            conn.read_only = True
+
+        if _readonly_pool is None:
+            _readonly_pool = ConnectionPool(
+                conninfo=hardened_ro_url,
+                min_size=min_size_ro,
+                max_size=max_size_ro,
+                timeout=timeout,
+                configure=_configure_readonly,
+                kwargs={"row_factory": dict_row},
+                open=True,
+                name="zerosql-readonly-pool"
+            )
+
+        if _admin_pool is None:
+            _admin_pool = ConnectionPool(
+                conninfo=hardened_admin_url,
+                min_size=min_size_admin,
+                max_size=max_size_admin,
+                timeout=timeout,
+                kwargs={"row_factory": dict_row},
+                open=True,
+                name="zerosql-admin-pool"
+            )
+
+
+def close_db_pools(timeout: float = 5.0) -> None:
+    """
+    Gracefully drains and closes both connection pools.
+    Idempotent. Safe to call multiple times.
+    """
+    global _readonly_pool, _admin_pool
+    with _pool_lock:
+        if _readonly_pool is not None:
+            try:
+                _readonly_pool.close(timeout=timeout)
+            except Exception:
+                pass
+            _readonly_pool = None
+
+        if _admin_pool is not None:
+            try:
+                _admin_pool.close(timeout=timeout)
+            except Exception:
+                pass
+            _admin_pool = None
+
+
+def get_pool_status() -> Dict[str, Any]:
+    """Returns runtime telemetry for active connection pools."""
+    status = {
+        "readonly_pool": None,
+        "admin_pool": None
+    }
+    if _readonly_pool is not None:
+        status["readonly_pool"] = {
+            "name": _readonly_pool.name,
+            "min_size": _readonly_pool.min_size,
+            "max_size": _readonly_pool.max_size,
+            "closed": getattr(_readonly_pool, "closed", False)
+        }
+    if _admin_pool is not None:
+        status["admin_pool"] = {
+            "name": _admin_pool.name,
+            "min_size": _admin_pool.min_size,
+            "max_size": _admin_pool.max_size,
+            "closed": getattr(_admin_pool, "closed", False)
+        }
+    return status
+
+
+class PooledConnectionContext:
+    """
+    Context manager and connection proxy for connections borrowed from a ConnectionPool.
+    Supports:
+    - with database.get_readonly_db_connection() as conn:
+    - conn = database.get_readonly_db_connection(); conn.cursor(); conn.close()
+    Enforces:
+    - Automatic connection return to the pool (no leaks)
+    - For read-only connections: always rollback on return to keep transaction state clean
+    - For admin connections: rollback on exception or if uncommitted
+    - Read-only enforcement (conn.read_only = True)
+    """
+    def __init__(self, pool: ConnectionPool, readonly: bool = False, timeout: float = 10.0):
+        self._pool = pool
+        self._readonly = readonly
+        self._timeout = timeout
+        self._conn: Optional[psycopg.Connection] = None
+
+    def __enter__(self) -> psycopg.Connection:
+        if self._conn is None:
+            try:
+                self._conn = self._pool.getconn(timeout=self._timeout)
+            except PoolTimeout as err:
+                raise ConnectionError(f"Database connection pool exhausted ({self._pool.name}). Error: {str(err)}")
+            except Exception as err:
+                raise ConnectionError(f"Failed to acquire connection from pool ({self._pool.name}). Error: {str(err)}")
+
+            if self._readonly:
+                self._conn.read_only = True
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None:
+            try:
+                if self._readonly:
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+                else:
+                    if exc_type is not None:
+                        try:
+                            self._conn.rollback()
+                        except Exception:
+                            pass
+                    elif hasattr(self._conn, "info") and hasattr(self._conn.info, "transaction_status"):
+                        if self._conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                            try:
+                                self._conn.rollback()
+                            except Exception:
+                                pass
+            finally:
+                try:
+                    self._pool.putconn(self._conn)
+                except Exception:
+                    pass
+                self._conn = None
+
+    def __getattr__(self, name: str) -> Any:
+        if self._conn is None:
+            self.__enter__()
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        self.__exit__(None, None, None)
+
+
+class DirectConnectionContext:
+    """
+    Fallback context manager for direct psycopg connections when pools are uninitialized.
+    Ensures connection is explicitly closed and transactions cleanly handled.
+    """
+    def __init__(self, conn: psycopg.Connection, readonly: bool = False):
+        self._conn = conn
+        self._readonly = readonly
+        if self._readonly:
+            self._conn.read_only = True
+
+    def __enter__(self) -> psycopg.Connection:
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if self._readonly:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            else:
+                if exc_type is not None:
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+                elif hasattr(self._conn, "info") and hasattr(self._conn.info, "transaction_status"):
+                    if self._conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                        try:
+                            self._conn.rollback()
+                        except Exception:
+                            pass
+        finally:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        self.__exit__(None, None, None)
+
+
 def get_readonly_db_connection():
     """
-    Establishes and returns a dedicated read-only connection for the AI SQL Agent.
-    Uses dict_row to return query results as dictionaries.
-    Strictly enforces transaction read-only mode at the connection level.
+    Acquires and returns a read-only database connection.
+    If pools are initialized, borrows from _readonly_pool.
+    Otherwise, creates a direct connection fallback.
     """
+    if _readonly_pool is not None:
+        return PooledConnectionContext(_readonly_pool, readonly=True)
+
     target_url = _resolve_connection_url(admin=False)
     if not target_url:
         raise ValueError("DATABASE_URL / DATABASE_READONLY_URL is not set in the environment variables (.env).")
     try:
-        conn = psycopg.connect(
-            target_url,
-            row_factory=dict_row
-        )
-        conn.read_only = True
-        return conn
+        hardened_url = _harden_connection_url(target_url)
+        conn = psycopg.connect(hardened_url, row_factory=dict_row)
+        return DirectConnectionContext(conn, readonly=True)
     except Exception as error:
         raise ConnectionError(f"Unable to connect to PostgreSQL (Read-Only). Error: {str(error)}")
 
 
 def get_admin_db_connection():
     """
-    Establishes and returns a write-capable connection for backend administrative
-    operations (such as database seeding and future dataset ingestion).
-    Uses dict_row to return query results as dictionaries.
-    IMPORTANT: This connection must NOT be exposed to the AI Agent.
+    Acquires and returns an admin write-capable database connection.
+    If pools are initialized, borrows from _admin_pool.
+    Otherwise, creates a direct connection fallback.
     """
+    if _admin_pool is not None:
+        return PooledConnectionContext(_admin_pool, readonly=False)
+
     target_url = _resolve_connection_url(admin=True)
     if not target_url:
         raise ValueError("DATABASE_URL / DATABASE_ADMIN_URL is not set in the environment variables (.env).")
     try:
-        conn = psycopg.connect(
-            target_url,
-            row_factory=dict_row
-        )
-        return conn
+        hardened_url = _harden_connection_url(target_url)
+        conn = psycopg.connect(hardened_url, row_factory=dict_row)
+        return DirectConnectionContext(conn, readonly=False)
     except Exception as error:
         raise ConnectionError(f"Unable to connect to PostgreSQL (Admin). Error: {str(error)}")
 
