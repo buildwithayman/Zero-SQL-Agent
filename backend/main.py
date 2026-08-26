@@ -3,12 +3,16 @@ ZeroSQL AI - FastAPI Application Entry Point (V2)
 Main ASGI application initialization, middleware configuration, and router setup.
 """
 
+import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from backend.config import get_settings
 from backend.logging_config import setup_logging
+from backend.limiter import limiter
 from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.datasets import router as dataset_router, public_router as public_dataset_router
@@ -39,6 +43,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Attach SlowAPI limiter instance to FastAPI application state
+app.state.limiter = limiter
+
+# Rate Limiting Middleware
+app.add_middleware(SlowAPIMiddleware)
+
 # CORS Middleware setup with configurable, secure origins (Step 6 Hardening)
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +57,35 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """
+    Custom exception handler for RateLimitExceeded.
+    Returns clean, non-leaking HTTP 429 JSON response with Retry-After header.
+    """
+    retry_after = 60
+    try:
+        if hasattr(request.state, "view_rate_limit") and request.state.view_rate_limit:
+            current_limit = request.state.view_rate_limit
+            window_stats = limiter.limiter.get_window_stats(current_limit[0], *current_limit[1])
+            reset_in = 1 + window_stats[0]
+            retry_after = max(1, int(reset_in - time.time()))
+    except Exception:
+        pass
+
+    logger.warning(f"Rate limit exceeded on {request.method} {request.url.path}")
+    content = {
+        "error": "RateLimitExceeded",
+        "detail": "Too many requests. Please try again later.",
+        "retry_after": retry_after
+    }
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content=content,
+        headers={"Retry-After": str(retry_after)}
+    )
 
 
 @app.exception_handler(Exception)

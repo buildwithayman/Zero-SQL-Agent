@@ -6,10 +6,11 @@ reusing the existing LangGraph ReAct agent, AST validator, and read-only executi
 
 import uuid
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from backend.config import Settings, get_settings
 from backend.schemas.chat import ChatRequest, ChatResponse
 from backend.services.dataset_service import DatasetService
+from backend.limiter import limiter
 from agents import ask_agent
 import database
 
@@ -59,7 +60,9 @@ def infer_visualization_hint(rows: List[Dict[str, Any]]) -> Optional[str]:
     summary="Query Database in Natural Language",
     description="Sends a natural language question to the AI SQL Agent, executes read-only SQL, and returns structured results."
 )
+@limiter.limit("10/minute")
 def chat_with_agent(
+    request: Request,
     payload: ChatRequest,
     settings: Settings = Depends(get_settings)
 ) -> ChatResponse:

@@ -6,9 +6,10 @@ and the Popular Dataset Hub catalog & AI recommendations.
 """
 
 from typing import Optional, List
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status, Query
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status, Query, Request
 import database
 from backend.config import Settings, get_settings
+from backend.limiter import limiter
 from backend.services.auth_service import get_current_admin
 from backend.services.storage_service import StorageService
 from backend.services.dataset_service import DatasetService
@@ -51,7 +52,9 @@ public_router = APIRouter(prefix="/datasets", tags=["Public Datasets"])
     summary="Upload New Dataset",
     description="Validates and securely persists a dataset (CSV, XLSX, JSON, Parquet) with metadata tracking."
 )
+@limiter.limit("5/minute")
 async def upload_dataset(
+    request: Request,
     file: UploadFile = File(..., description="Dataset file (CSV, XLSX, JSON, Parquet)"),
     dataset_name: Optional[str] = Form(None, description="Optional custom name for the dataset"),
     admin_user: str = Depends(get_current_admin),
@@ -191,7 +194,9 @@ def delete_dataset(
     summary="Process, Clean, and Profile Dataset",
     description="Parses dataset, performs non-destructive cleaning, detects schema types, and returns preview and cleaning report."
 )
+@limiter.limit("5/minute")
 def process_dataset(
+    request: Request,
     dataset_id: str,
     admin_user: str = Depends(get_current_admin),
     settings: Settings = Depends(get_settings)
@@ -207,7 +212,9 @@ def process_dataset(
     summary="Create PostgreSQL Table and Import Data",
     description="Executes explicit, transactional table creation and bulk insertion for the cleaned dataset."
 )
+@limiter.limit("5/minute")
 def import_dataset(
+    request: Request,
     dataset_id: str,
     payload: Optional[DatasetImportRequest] = None,
     admin_user: str = Depends(get_current_admin),
@@ -289,7 +296,9 @@ def regenerate_dataset_prompts(
     summary="List Popular Catalog Datasets",
     description="Returns curated popular datasets across domains with live PostgreSQL import status."
 )
+@limiter.limit("60/minute")
 def list_popular_catalog(
+    request: Request,
     category: Optional[str] = Query(None, description="Optional category filter"),
     settings: Settings = Depends(get_settings)
 ) -> CatalogListResponse:

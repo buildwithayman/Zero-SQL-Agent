@@ -3,10 +3,11 @@ Admin Authentication Routes
 Handles admin login and token generation.
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request
 from backend.config import Settings, get_settings
 from backend.schemas.auth import AdminLoginRequest, AdminLoginResponse
 from backend.services.auth_service import verify_password, create_access_token
+from backend.limiter import limiter
 
 router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
 
@@ -17,7 +18,9 @@ router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
     summary="Admin Authentication Login",
     description="Authenticates admin credentials and returns an access token."
 )
+@limiter.limit("5/minute")
 def admin_login(
+    request: Request,
     payload: AdminLoginRequest,
     settings: Settings = Depends(get_settings)
 ) -> AdminLoginResponse:
