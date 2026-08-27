@@ -261,6 +261,12 @@ class TestSecurityHardening(unittest.TestCase):
             self.assertIn("AI Agent query execution failed due to an internal server error", data["detail"])
         print("  ✅ PASS: Raw AI agent exceptions are sanitized in API responses.")
 
+    def test_openapi_docs_accessibility(self):
+        """Verify OpenAPI documentation endpoints are available in development."""
+        res_dev = client.get("/docs")
+        self.assertEqual(res_dev.status_code, 200)
+        print("  ✅ PASS: OpenAPI documentation accessible in development mode.")
+
 
 if __name__ == "__main__":
     print("\n" + "=" * 70)

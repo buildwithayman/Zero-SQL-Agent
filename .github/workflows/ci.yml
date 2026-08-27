@@ -1,0 +1,78 @@
+name: ZeroSQL AI V2 — Production CI Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  backend-audit-and-test:
+    name: Backend Security, Pooling & Rate Limiting Verification
+    runs-on: ubuntu-latest
+
+    env:
+      ENVIRONMENT: development
+      PYTHONPATH: .
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Bytecode Compilation Check
+        run: |
+          python -m py_compile database.py agents.py sql_validator.py \
+            backend/config.py backend/main.py backend/limiter.py \
+            backend/schemas/health.py backend/api/routes/health.py \
+            backend/api/routes/datasets.py backend/api/routes/chat.py \
+            backend/services/storage_service.py
+
+      - name: Run SQL AST Security Validator Tests
+        run: python sql_validator.py
+
+      - name: Run Database Connection Pooling Tests (Hermetic)
+        run: python test_database_pooling.py
+
+      - name: Run API Rate Limiting Tests (Hermetic)
+        run: python test_rate_limiting.py
+
+      - name: Run Production Security Hardening Tests (Hermetic)
+        run: python test_security_hardening.py
+
+  frontend-build:
+    name: Frontend TypeScript & Vite Production Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Validate Production API Configuration & Build Bundle
+        working-directory: frontend
+        run: |
+          # Build with production API target to guarantee no localhost fallback is baked in
+          VITE_API_BASE_URL="https://api.zerosql.ai" npm run build
+          # Verify production distribution bundle exists
+          test -f dist/index.html || { echo "Build artifact dist/index.html missing!"; exit 1; }

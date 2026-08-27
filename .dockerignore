@@ -1,0 +1,39 @@
+# Version control
+.git
+.github
+
+# Environment & Secrets (NEVER bake into container)
+.env
+.env.*
+
+# Database dumps & SQL scripts
+*.dump
+*.sql
+
+# Logs
+*.log
+
+# Python bytecode & cache
+__pycache__
+*.py[cod]
+.pytest_cache
+
+# Frontend source (deployed separately to CDN)
+frontend/
+
+# Local uploaded data & temporary files
+data/
+uploads/
+
+# Test suites & unit tests
+test_*.py
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Operating system artifacts
+.DS_Store
+.idea
+.vscode

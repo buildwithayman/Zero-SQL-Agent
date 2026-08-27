@@ -47,13 +47,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"Shutting down {settings.app_name}...")
 
 
+is_production = settings.environment.lower() == "production"
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="FastAPI Backend for ZeroSQL AI: Secure Dataset Management & Natural Language Analytics",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
     lifespan=lifespan
 )
 
