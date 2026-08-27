@@ -8,9 +8,12 @@ import re
 import json
 import uuid
 import io
+import logging
 from typing import Tuple, Optional
 from fastapi import UploadFile, HTTPException, status
 from backend.config import Settings
+
+logger = logging.getLogger("zerosql")
 
 
 def format_file_size(size_bytes: int) -> str:
@@ -185,9 +188,10 @@ class StorageService:
             with open(stored_path, "wb") as f:
                 f.write(content)
         except Exception as e:
+            logger.error(f"Failed to persist dataset to storage: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to persist dataset to storage: {str(e)}"
+                detail="Failed to persist dataset file to server storage."
             )
 
         return dataset_id, original_filename, stored_path, file_size, ext
@@ -254,9 +258,10 @@ class StorageService:
             with open(stored_path, "wb") as f:
                 f.write(content)
         except Exception as e:
+            logger.error(f"Failed to persist dataset to storage: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to persist dataset to storage: {str(e)}"
+                detail="Failed to persist dataset file to server storage."
             )
 
         return dataset_id, safe_orig_name, stored_path, file_size, ext

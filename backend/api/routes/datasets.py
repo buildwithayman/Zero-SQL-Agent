@@ -5,11 +5,14 @@ data profiling, data cleaning, dynamic PostgreSQL table ingestion, prompt sugges
 and the Popular Dataset Hub catalog & AI recommendations.
 """
 
+import logging
 from typing import Optional, List
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status, Query, Request
 import database
 from backend.config import Settings, get_settings
 from backend.limiter import limiter
+
+logger = logging.getLogger("zerosql")
 from backend.services.auth_service import get_current_admin
 from backend.services.storage_service import StorageService
 from backend.services.dataset_service import DatasetService
@@ -87,9 +90,10 @@ async def upload_dataset(
         )
     except Exception as e:
         storage.delete_stored_file(stored_path)
+        logger.error(f"Database metadata recording failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database metadata recording failed: {str(e)}"
+            detail="Database metadata recording failed due to an internal server error."
         )
 
     return DatasetUploadResponse(

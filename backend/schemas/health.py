@@ -9,11 +9,9 @@ from pydantic import BaseModel, Field
 
 
 class DatabaseHealthStatus(BaseModel):
-    """Database connectivity and metadata status model."""
+    """Database connectivity and table status model."""
     status: str = Field(description="Database connectivity status: 'connected' or 'disconnected'")
     healthy: bool = Field(description="True if database responds to health ping")
-    database_name: Optional[str] = Field(default=None, description="Active database name")
-    server_version: Optional[str] = Field(default=None, description="PostgreSQL server version")
     total_tables: int = Field(default=0, description="Number of public tables detected")
 
 

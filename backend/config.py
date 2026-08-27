@@ -6,8 +6,12 @@ Centralized, validated settings using Pydantic Settings and environment variable
 import os
 from functools import lru_cache
 from typing import Optional, List
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_DEFAULT_ADMIN_PASSWORD = "admin123"
+INSECURE_DEFAULT_ADMIN_API_KEY = "zerosql-admin-secret-key-2026"
+INSECURE_DEFAULT_SECRET_KEY = "zerosql-super-secret-hmac-jwt-key-2026"
 
 
 class Settings(BaseSettings):
@@ -74,6 +78,47 @@ class Settings(BaseSettings):
 
     # External Network Fetch Timeout
     external_fetch_timeout_sec: float = Field(default=10.0, description="Timeout in seconds for external dataset downloads")
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def parse_cors_allowed_origins(cls, v):
+        """Allows CORS origins to be specified as JSON array or comma-separated string."""
+        if isinstance(v, str):
+            v = v.strip()
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    return json.loads(v)
+                except Exception:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        """
+        Enforces strict credential security in production environments.
+        Refuses to boot with default secrets or weak credentials.
+        """
+        if self.environment.lower() == "production":
+            errors = []
+            if self.secret_key == INSECURE_DEFAULT_SECRET_KEY or len(self.secret_key) < 32:
+                errors.append(
+                    "SECRET_KEY must be explicitly set to a strong random key (min 32 chars) in production."
+                )
+            if self.admin_password == INSECURE_DEFAULT_ADMIN_PASSWORD or len(self.admin_password) < 12:
+                errors.append(
+                    "ADMIN_PASSWORD must not use default or weak password (min 12 chars) in production."
+                )
+            if self.admin_api_key == INSECURE_DEFAULT_ADMIN_API_KEY or len(self.admin_api_key) < 16:
+                errors.append(
+                    "ADMIN_API_KEY must not use default or weak key (min 16 chars) in production."
+                )
+            if errors:
+                raise ValueError(
+                    f"Production Security Enforcement Failed: {'; '.join(errors)}"
+                )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

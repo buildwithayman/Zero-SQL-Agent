@@ -4,7 +4,7 @@ Provides system status, database connectivity verification, and metadata.
 """
 
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response, status
 from backend.config import Settings, get_settings
 from backend.schemas.health import HealthResponse, DatabaseHealthStatus
 import database
@@ -18,24 +18,29 @@ router = APIRouter(tags=["Health"])
     summary="System and Database Health Check",
     description="Returns API service health, timestamp, and read-only PostgreSQL connection status."
 )
-def get_health(settings: Settings = Depends(get_settings)) -> HealthResponse:
+def get_health(
+    response: Response,
+    settings: Settings = Depends(get_settings)
+) -> HealthResponse:
     """
     Checks database health via safe read-only query and returns structured status.
+    Returns HTTP 200 when database is healthy, HTTP 503 when disconnected or failing.
+    Omit PostgreSQL server version and database name to prevent infrastructure fingerprinting.
     """
     is_healthy = database.check_db_health()
-    server_info = database.get_db_server_info() if is_healthy else {}
+    if not is_healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
     tables = database.get_tables_list() if is_healthy else []
 
     db_status = DatabaseHealthStatus(
         status="connected" if is_healthy else "disconnected",
         healthy=is_healthy,
-        database_name=server_info.get("database") if is_healthy else None,
-        server_version=server_info.get("version") if is_healthy else None,
         total_tables=len(tables)
     )
 
     return HealthResponse(
-        status="ok" if is_healthy else "degraded",
+        status="ok" if is_healthy else "unhealthy",
         app_name=settings.app_name,
         version=settings.app_version,
         environment=settings.environment,

@@ -5,6 +5,7 @@ reusing the existing LangGraph ReAct agent, AST validator, and read-only executi
 """
 
 import uuid
+import logging
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from backend.config import Settings, get_settings
@@ -13,6 +14,8 @@ from backend.services.dataset_service import DatasetService
 from backend.limiter import limiter
 from agents import ask_agent
 import database
+
+logger = logging.getLogger("zerosql")
 
 router = APIRouter(prefix="/chat", tags=["AI Agent Chat"])
 
@@ -118,9 +121,10 @@ def chat_with_agent(
             active_table=active_table
         )
     except Exception as e:
+        logger.error(f"AI Agent query execution failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI Agent query execution failed: {str(e)}"
+            detail="AI Agent query execution failed due to an internal server error."
         )
 
     answer = agent_resp.get("answer", "")
