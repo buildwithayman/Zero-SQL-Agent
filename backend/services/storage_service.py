@@ -119,12 +119,68 @@ def validate_file_content(file_bytes: bytes, file_format: str) -> Tuple[bool, st
 
 
 class StorageService:
-    """Handles secure file persistence and deletion."""
+    """
+    Handles secure file persistence, path resolution, and deletion.
+
+    Portability Architecture:
+    - `self.relative_upload_dir`: Stores the relative directory prefix (e.g. 'data/uploads') used for database records.
+    - `self.upload_dir`: The resolved absolute filesystem path used for actual disk reads and writes on the current host.
+    - `resolve_stored_path()`: Safely resolves any relative or legacy stored path to the current host's absolute path.
+    """
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        # Portable relative path prefix (e.g., "data/uploads")
+        self.relative_upload_dir = settings.upload_dir.replace("\\", "/").rstrip("/")
+        # Resolved absolute filesystem path for local I/O operations
         self.upload_dir = os.path.abspath(settings.upload_dir)
         os.makedirs(self.upload_dir, exist_ok=True)
+
+    def resolve_stored_path(self, stored_path: str) -> str:
+        """
+        Safely resolves a stored path identifier into a validated absolute filesystem path
+        within the current host's configured upload directory.
+
+        Supports:
+        - Modern portable relative paths: 'data/uploads/<uuid>.csv'
+        - Bare filenames: '<uuid>.csv'
+        - Legacy absolute paths from other environments (e.g. '/Users/.../data/uploads/<uuid>.csv' on EC2)
+
+        Guarantees:
+        - Strict path containment validation via os.path.commonpath prevents directory traversal.
+        """
+        if not stored_path or not isinstance(stored_path, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security Error: Invalid or empty dataset storage path."
+            )
+
+        clean = stored_path.replace("\\", "/").strip()
+
+        # 1. Check if path starts with relative_upload_dir (e.g. "data/uploads/<uuid>.csv")
+        if clean.startswith(self.relative_upload_dir + "/"):
+            sub_path = clean[len(self.relative_upload_dir) + 1:]
+            candidate = os.path.normpath(os.path.join(self.upload_dir, sub_path))
+        # 2. Check if path is a direct filename (e.g. "<uuid>.csv")
+        elif "/" not in clean and "\\" not in clean:
+            candidate = os.path.normpath(os.path.join(self.upload_dir, clean))
+        # 3. Handle legacy absolute paths or nested paths by extracting the basename
+        else:
+            base_name = os.path.basename(clean)
+            candidate = os.path.normpath(os.path.join(self.upload_dir, base_name))
+
+        # 4. Strict Path Containment Validation using commonpath
+        resolved_abs = os.path.abspath(candidate)
+        try:
+            if os.path.commonpath([resolved_abs, self.upload_dir]) != self.upload_dir:
+                raise ValueError("Resolved path escapes upload directory.")
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security Error: Path traversal attempt detected."
+            )
+
+        return resolved_abs
 
     async def save_uploaded_file(
         self,
@@ -134,7 +190,9 @@ class StorageService:
         Validates, sanitizes, and persists an uploaded file.
         
         Returns:
-            Tuple[dataset_id, original_filename, stored_path, file_size_bytes, file_format]
+            Tuple[dataset_id, original_filename, relative_stored_path, file_size_bytes, file_format]
+            Note: `relative_stored_path` is the portable relative path (e.g. 'data/uploads/<uuid>.csv')
+            for database persistence.
         """
         raw_filename = upload_file.filename or "dataset"
         original_filename = sanitize_filename(raw_filename)
@@ -171,21 +229,24 @@ class StorageService:
                 detail=reason
             )
 
-        # 4. Generate Safe Unique Filename on Disk
+        # 4. Generate Safe Unique Filename
         dataset_id = str(uuid.uuid4())
         stored_filename = f"{dataset_id}.{ext}"
-        stored_path = os.path.join(self.upload_dir, stored_filename)
 
-        # Guarantee no path traversal outside upload_dir
-        if not os.path.abspath(stored_path).startswith(self.upload_dir):
+        # Resolve absolute filesystem path for physical disk write
+        abs_file_path = os.path.normpath(os.path.join(self.upload_dir, stored_filename))
+        if os.path.commonpath([os.path.abspath(abs_file_path), self.upload_dir]) != self.upload_dir:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Security Error: Path traversal attempt detected."
             )
 
+        # Portable relative path for database storage (environment-independent)
+        relative_stored_path = f"{self.relative_upload_dir}/{stored_filename}"
+
         # Write to disk
         try:
-            with open(stored_path, "wb") as f:
+            with open(abs_file_path, "wb") as f:
                 f.write(content)
         except Exception as e:
             logger.error(f"Failed to persist dataset to storage: {str(e)}")
@@ -194,7 +255,7 @@ class StorageService:
                 detail="Failed to persist dataset file to server storage."
             )
 
-        return dataset_id, original_filename, stored_path, file_size, ext
+        return dataset_id, original_filename, relative_stored_path, file_size, ext
 
     def save_raw_bytes(
         self,
@@ -207,7 +268,7 @@ class StorageService:
         Enforces size limit, content structure validation, and UUID storage.
         
         Returns:
-            Tuple[dataset_id, original_filename, stored_path, file_size_bytes, file_format]
+            Tuple[dataset_id, original_filename, relative_stored_path, file_size_bytes, file_format]
         """
         safe_orig_name = sanitize_filename(original_filename)
         ext = file_format.lower().strip() if file_format else extract_file_extension(safe_orig_name)
@@ -243,19 +304,21 @@ class StorageService:
                 detail=reason
             )
 
-        # 4. Generate Safe Unique Filename on Disk
+        # 4. Generate Safe Unique Filename
         dataset_id = str(uuid.uuid4())
         stored_filename = f"{dataset_id}.{ext}"
-        stored_path = os.path.join(self.upload_dir, stored_filename)
 
-        if not os.path.abspath(stored_path).startswith(self.upload_dir):
+        abs_file_path = os.path.normpath(os.path.join(self.upload_dir, stored_filename))
+        if os.path.commonpath([os.path.abspath(abs_file_path), self.upload_dir]) != self.upload_dir:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Security Error: Path traversal attempt detected."
             )
 
+        relative_stored_path = f"{self.relative_upload_dir}/{stored_filename}"
+
         try:
-            with open(stored_path, "wb") as f:
+            with open(abs_file_path, "wb") as f:
                 f.write(content)
         except Exception as e:
             logger.error(f"Failed to persist dataset to storage: {str(e)}")
@@ -264,20 +327,23 @@ class StorageService:
                 detail="Failed to persist dataset file to server storage."
             )
 
-        return dataset_id, safe_orig_name, stored_path, file_size, ext
+        return dataset_id, safe_orig_name, relative_stored_path, file_size, ext
 
 
     def delete_stored_file(self, stored_path: str) -> bool:
         """
         Safely deletes the stored file from disk if it exists.
+        Resolves relative and legacy stored paths against the configured upload directory.
         Guards against arbitrary path deletion outside upload_dir.
         """
         if not stored_path:
             return False
-        abs_path = os.path.abspath(stored_path)
-        if not abs_path.startswith(self.upload_dir):
-            # Guard against deleting files outside upload_dir
+        try:
+            abs_path = self.resolve_stored_path(stored_path)
+        except Exception:
+            # Traversal or invalid path
             return False
+
         if os.path.exists(abs_path) and os.path.isfile(abs_path):
             try:
                 os.remove(abs_path)

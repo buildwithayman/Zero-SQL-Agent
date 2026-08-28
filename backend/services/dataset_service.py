@@ -3,8 +3,10 @@ Dataset Metadata Management Service
 Provides persistent CRUD operations for dataset tracking in PostgreSQL via admin connection.
 """
 
+import os
 import json
 import re
+import logging
 from typing import List, Optional, Tuple
 from datetime import datetime, timezone
 from psycopg import sql
@@ -12,6 +14,8 @@ import database
 from backend.config import Settings
 from backend.schemas.dataset import DatasetMetadataSchema
 from backend.services.storage_service import StorageService, format_file_size
+
+logger = logging.getLogger("zerosql")
 
 
 # Immutable set of protected production tables that can NEVER be dropped via dataset cleanup
@@ -303,3 +307,54 @@ class DatasetService:
             conn.commit()
 
         return row_to_schema(row) if row else None
+
+    def migrate_stored_paths_to_relative(self) -> int:
+        """
+        Safely normalizes legacy absolute filesystem paths in dataset_metadata
+        into portable relative storage paths (e.g. 'data/uploads/<uuid>.<ext>').
+
+        Guarantees:
+        - Only converts paths that contain a valid dataset filename.
+        - Skips records that are already stored as relative paths.
+        - Preserves database integrity within a single transaction.
+        - Does NOT delete or modify physical dataset files.
+
+        Returns:
+            int: Total count of records migrated.
+        """
+        rel_base = self.settings.upload_dir.replace("\\", "/").rstrip("/")
+        updated_count = 0
+
+        with database.get_admin_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT dataset_id, stored_path FROM dataset_metadata;")
+                rows = cursor.fetchall()
+                if not rows:
+                    return 0
+
+                for row in rows:
+                    ds_id = row["dataset_id"]
+                    current_path = row["stored_path"]
+                    if not current_path:
+                        continue
+
+                    clean = current_path.replace("\\", "/").strip()
+
+                    # If already a clean relative path starting with rel_base, skip
+                    if clean.startswith(rel_base + "/"):
+                        continue
+
+                    # If it's a bare filename or legacy absolute path, extract filename
+                    base_name = os.path.basename(clean)
+                    if base_name and "." in base_name:
+                        new_rel_path = f"{rel_base}/{base_name}"
+                        cursor.execute(
+                            "UPDATE dataset_metadata SET stored_path = %s WHERE dataset_id = %s;",
+                            (new_rel_path, ds_id)
+                        )
+                        updated_count += 1
+
+            conn.commit()
+
+        logger.info(f"Migrated {updated_count} dataset_metadata stored_path records to relative format.")
+        return updated_count

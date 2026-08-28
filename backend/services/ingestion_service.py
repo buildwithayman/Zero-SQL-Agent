@@ -101,7 +101,10 @@ class IngestionService:
         self.prompt_svc = PromptService()
 
     def _get_verified_dataset_meta(self, dataset_id: str):
-        """Fetches and verifies dataset metadata and file existence."""
+        """
+        Fetches and verifies dataset metadata and underlying file existence.
+        Resolves portable relative stored paths against the runtime upload directory.
+        """
         dataset = self.dataset_svc.get_dataset_by_id(dataset_id)
         if not dataset:
             raise HTTPException(
@@ -109,22 +112,16 @@ class IngestionService:
                 detail=f"Dataset with ID '{dataset_id}' not found."
             )
 
-        stored_path = os.path.abspath(dataset.stored_path)
-        upload_dir = os.path.abspath(self.settings.upload_dir)
+        # Resolve relative stored path to current environment's absolute filesystem path
+        abs_stored_path = self.storage.resolve_stored_path(dataset.stored_path)
 
-        if not stored_path.startswith(upload_dir):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Security Error: Dataset storage path is outside configured upload directory."
-            )
-
-        if not os.path.exists(stored_path):
+        if not os.path.exists(abs_stored_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Underlying dataset file is missing from storage."
             )
 
-        return dataset, stored_path
+        return dataset, abs_stored_path
 
     def process_dataset(self, dataset_id: str) -> DatasetProcessResponse:
         """
